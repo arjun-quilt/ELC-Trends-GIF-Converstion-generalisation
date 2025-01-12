@@ -164,7 +164,7 @@ if uploaded_file is not None:
     # Input parameters for TikTok and YouTube Shorts
     if st.button("Start Processing"):
         input_excel = uploaded_file
-        sheet_name = 'Sheet1'  # Replace with the sheet name
+        sheet_name = 'Master_Sheet'  # Replace with the sheet name
         process_videos_from_excel(input_excel, sheet_name)
         st.success("Processing completed!")
 
