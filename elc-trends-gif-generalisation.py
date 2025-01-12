@@ -7,6 +7,7 @@ import time
 from moviepy.editor import VideoFileClip
 import subprocess
 import shutil
+import openpyxl
 
 # Streamlit app title
 st.title("YouTube Shorts and TikTok Video Downloader")
