@@ -83,6 +83,10 @@ st.title("TikTok and YouTube Shorts Downloader")
 # File uploader for Excel file
 uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
 
+# Initialize tiktok_videos and youtube_shorts to avoid NameError
+tiktok_videos = []
+youtube_shorts = []
+
 if uploaded_file is not None:
     # Read the Excel file
     df = pd.read_excel(uploaded_file, sheet_name='Master_Sheet')  # Use uploaded file
