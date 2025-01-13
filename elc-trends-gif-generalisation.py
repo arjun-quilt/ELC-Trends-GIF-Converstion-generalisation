@@ -14,7 +14,6 @@ import tempfile
 
 
 
-
 # Extract the secret
 gcp_secret = st.secrets["gcp_secret"]
 
