@@ -10,14 +10,23 @@ import subprocess
 from yt_dlp.utils import DownloadError
 from google.cloud import storage
 import streamlit as st  # Import Streamlit
+import tempfile
 
 
 
 
-# Set the environment variable for authentication
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/content/gcp-sa-private-key.json"
+# Extract the secret
+gcp_secret = st.secrets["gcp_secret"]
 
+# Write the secret to a temporary file
+with tempfile.NamedTemporaryFile(delete=False, mode="w") as temp_file:
+    temp_file.write(gcp_secret)
+    temp_file_path = temp_file.name
+
+# Set the environment variable to the temporary file path
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_file_path
 # Now proceed with your GCS operations
+
 storage_client = storage.Client()
 bucket = storage_client.bucket('tiktok-actor-content')
 
