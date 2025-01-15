@@ -259,7 +259,7 @@ input_excel = st.file_uploader("Upload Excel File", type=["xlsx"])
 
 if input_excel:
     # Read the Excel file
-    df = pd.read_excel(input_excel, sheet_name='Sheet1')  # Default sheet name
+    df = pd.read_excel(input_excel, sheet_name='Master_Sheet')  # Default sheet name
     st.write("Data from Excel:", df)
 
     # Assume the URLs are in a column named 'Links'
