@@ -5,29 +5,15 @@ import requests
 import time
 import shutil
 from moviepy.editor import VideoFileClip
-import pandas as pd
 import subprocess
 from yt_dlp.utils import DownloadError
 from google.cloud import storage
 import streamlit as st  # Import Streamlit
 import tempfile
+import io  # Import io for BytesIO
 
 
-
-# Extract the secret
-gcp_secret = st.secrets["gcp_secret"]
-
-# Write the secret to a temporary file
-with tempfile.NamedTemporaryFile(delete=False, mode="w") as temp_file:
-    temp_file.write(gcp_secret)
-    temp_file_path = temp_file.name
-
-# Set the environment variable to the temporary file path
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_file_path
-# Now proceed with your GCS operations
-
-storage_client = storage.Client()
-bucket = storage_client.bucket('tiktok-actor-content')
+############## function starts #############
 
 def yt_shorts_downloader(urls, bucket_name):
     # Ensure URLs is a list
@@ -76,73 +62,11 @@ def upload_to_gcs(bucket, video_data, destination_blob):
     print(f"Video uploaded to {destination_blob} in bucket {bucket.name}.")
 
 
-
-# Streamlit app title
-st.title("TikTok and YouTube Shorts Downloader")
-
-# File uploader for Excel file
-uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
-
-# Initialize tiktok_videos and youtube_shorts to avoid NameError
-tiktok_videos = []
-youtube_shorts = []
-
-if uploaded_file is not None:
-    # Read the Excel file
-    df = pd.read_excel(uploaded_file, sheet_name='Master_Sheet')  # Use uploaded file
-    urls = df['Links'].tolist()
-
-    # TikTok Videos: Last part of the URL contains only numbers
-    tiktok_videos = [url for url in urls if url.split("/")[-1].isdigit()]
-
-    # YouTube Shorts: Last part of the URL contains both numbers and letters
-    youtube_shorts = [url for url in urls if any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1])]
-
-    # Button to start downloading
-    if st.button("Download Videos"):
-        yt_shorts_downloader(
-            urls=youtube_shorts,
-            bucket_name="tiktok-actor-content"
-        )
-        st.success("Videos downloaded successfully!")
-
-# Input parameters
-input_params = {
-    "disableCheerioBoost": False,
-    "disableEnrichAuthorStats": False,
-    "resultsPerPage": 1,
-    "searchSection": "/video",
-    "shouldDownloadCovers": True,
-    "shouldDownloadSlideshowImages": False,
-    "shouldDownloadVideos": True,
-    "maxProfilesPerQuery": 10,
-    "tiktokMemoryMb": "default",
-    "urls": tiktok_videos  # Only use tiktok videos to process in apify
-}
-
-# API token
-API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
-
-# Task ID for TikTok scraper
-TASK_ID = "H70fR5ndjUD0loq5H"
-
-# API request to run the task
-# task_url = f"https://api.apify.com/v2/actor-tasks/{TASK_ID}/runs?token={API_TOKEN}"
-task_url = f"https://api.apify.com/v2/actor-tasks/quilt-org~tiktok-orchestrator-elc-trends-gifs/runs?token={API_TOKEN}"
-headers = {"Content-Type": "application/json"}
-
-response = requests.post(task_url, json={"input": input_params}, headers=headers)
-
-# Print the response
-st.write(f"Response Status Code: {response.status_code}")
-st.write(response.json())
-
-data = response.json()
-run_id = data['data']['id']
-print(run_id)
-
 def check_apify_run_status(run_id, api_token):
     url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={api_token}"
+    
+    # Streamlit component to display status
+    status_message = st.empty()  # Create an empty placeholder for status updates
 
     while True:
         response = requests.get(url)
@@ -154,76 +78,23 @@ def check_apify_run_status(run_id, api_token):
             status = run_data.get('data', {}).get('status')
 
             if status == 'SUCCEEDED':
-                print("SUCCEEDED")
-                break
+                status_message.success("SUCCEEDED")  # Update Streamlit with success message
+                return True  # Explicitly return True for success
             elif status == 'FAILED':
-                print("FAILED")
-                break
+                status_message.error("FAILED")  # Update Streamlit with failure message
+                return False  # Explicitly return False for failure
             elif status == 'RUNNING':
-                print("Run is still in progress...")
+                status_message.info("Run is still in progress...")  # Update Streamlit with running message
             else:
-                print(f"Unknown status: {status}")
+                status_message.warning(f"Unknown status: {status}")  # Update Streamlit with unknown status
 
             # Wait for a few seconds before checking again
             time.sleep(5)
         else:
-            print(f"Error fetching run status: {response.status_code}, {response.text}")
-            break
-
-# Replace with your run ID and Apify API token
-data = response.json()
-run_id = data['data']['id']
-print(run_id)
-api_token = 'apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk'  # Replace with your API token
-
-check_apify_run_status(run_id, api_token)
-
-input_list_of_dicts = df.to_dict(orient="records")
-
-# Loop through each row (input_dict) and add the GCS URL
-for input_dict in input_list_of_dicts:
-    clean_url = input_dict["Links"]
-    video_id = clean_url.split("?")[0].split("/")[-1]
-    input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
-    input_dict["Gif Url"] = f"https://storage.googleapis.com/tiktok-actor-content/gifs_20240419/{video_id}.gif"
-
-# Optionally, you can save this updated data to a new Excel file
-output_df = pd.DataFrame(input_list_of_dicts)
-output_file_name = 'updated_tiktok_urls.xlsx'  # The name of the updated file
-output_df.to_excel(output_file_name, index=False)
-
-st.write(f"Updated Excel file saved as {output_file_name}")
-
-import pandas as pd
-import requests
-
-def validate_urls_from_excel(file_name: str, sheet_name: str, column_name: str):
-    try:
-        # Read the Excel file
-        df = pd.read_excel(file_name, sheet_name=sheet_name)
-
-        # Get the list of URLs from the specified column
-        urls = df[column_name].tolist()
-
-        # Validate each URL
-        for url in urls:
-            try:
-                response = requests.get(url, timeout=5)  # Set a timeout to handle slow responses
-                if response.status_code != 200:
-                    print(f"Invalid URL (status code {response.status_code}): {url}")
-            except requests.exceptions.RequestException as e:
-                print(f"Error accessing URL: {url}, Error: {e}")
-
-    except Exception as e:
-        print(f"Error reading the Excel file or processing URLs: {e}")
+            status_message.error(f"Error fetching run status: {response.status_code}, {response.text}")
+            return False  # Return False if the request fails
 
 
-# Example usage
-file_name = '/content/updated_tiktok_urls.xlsx'  # Replace with your file path
-sheet_name = 'Sheet1'  # Replace with your sheet name
-column_name = 'Gcs Url'  # Replace with your column name containing URLs
-
-validate_urls_from_excel(file_name, sheet_name, column_name)
 
 # Function to convert media files to GIFs
 def convert_to_gif(media_file, max_duration=10, fps=10, output_dir='/content/gifs'):
@@ -331,6 +202,8 @@ def resize_gif(input_gif, max_size_mb=1.99, processed_dir='/content/processed_gi
 # Main logic to process an Excel file and convert videos to GIFs
 import os
 
+
+#call this function at last
 def process_videos_from_excel(input_excel, sheet_name, output_dir='/content/gifs'):
     df = pd.read_excel(input_excel, sheet_name=sheet_name)
 
@@ -339,7 +212,7 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir='/content/gifs
         video_url = row["Gcs Url"]  # Replace with the correct column name in your Excel
         print(f"Processing video URL: {video_url}")
 
-        # Download the video from tiktok
+
         video_path = download_and_trim_video(video_url)
 
         if video_path:
@@ -361,17 +234,105 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir='/content/gifs
                 print(f"Deleted video: {video_path}")
 
 
-# Example usage
-input_excel = "/content/updated_tiktok_urls.xlsx"   # Replace with the actual path to your Excel file
-sheet_name = 'Sheet1'  # Replace with the sheet name
-process_videos_from_excel(input_excel, sheet_name)
+############### function ends ##############
 
-# Example usage
-if st.button("Validate URLs"):
-    validate_urls_from_excel(output_file_name, 'Sheet1', 'Gcs Url')
-    st.success("URL validation completed!")
+# Streamlit app title
+st.title("TikTok Video Processing App")
 
-# Main logic to process an Excel file and convert videos to GIFs
-if st.button("Process Videos"):
-    process_videos_from_excel(output_file_name, 'Sheet1')
-    st.success("Video processing completed!")
+# Extract the secret
+gcp_secret = st.secrets["gcp_secret"]
+
+# Write the secret to a temporary file
+with tempfile.NamedTemporaryFile(delete=False, mode="w") as temp_file:
+    temp_file.write(gcp_secret)
+    temp_file_path = temp_file.name
+
+# Set the environment variable to the temporary file path
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_file_path
+
+# Initialize Google Cloud Storage client
+storage_client = storage.Client()
+bucket = storage_client.bucket('tiktok-actor-content')
+
+# File uploader for Excel file
+input_excel = st.file_uploader("Upload Excel File", type=["xlsx"])
+
+if input_excel:
+    # Read the Excel file
+    df = pd.read_excel(input_excel, sheet_name='Sheet1')  # Default sheet name
+    st.write("Data from Excel:", df)
+
+    # Assume the URLs are in a column named 'Links'
+    urls = df['Links'].tolist()
+
+    # TikTok Videos: Last part of the URL contains only numbers
+    tiktok_videos = [url for url in urls if url.split("/")[-1].isdigit()]
+
+    # YouTube Shorts: Last part of the URL contains both numbers and letters
+    youtube_shorts = [url for url in urls if any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1])]
+
+    # Button to start downloading and processing videos
+    if st.button("Download and Process Videos"):
+        # Example usage of yt_shorts_downloader
+        yt_shorts_downloader(
+            urls=youtube_shorts,
+            bucket_name="tiktok-actor-content"
+        )
+
+        # Input parameters for Apify run
+        input_params = {
+            "disableCheerioBoost": False,
+            "disableEnrichAuthorStats": False,
+            "resultsPerPage": 1,
+            "searchSection": "/video",
+            "shouldDownloadCovers": True,
+            "shouldDownloadSlideshowImages": False,
+            "shouldDownloadVideos": True,
+            "maxProfilesPerQuery": 10,
+            "tiktokMemoryMb": "default",
+            "urls": tiktok_videos  # Only use TikTok videos to process in Apify
+        }
+
+        # API token
+        API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
+
+        # Task ID for TikTok scraper
+        TASK_ID = "H70fR5ndjUD0loq5H"
+
+        # API request to run the task
+        task_url = f"https://api.apify.com/v2/actor-tasks/quilt-org~tiktok-orchestrator-elc-trends-gifs/runs?token={API_TOKEN}"
+        headers = {"Content-Type": "application/json"}
+
+        try:
+            response = requests.post(task_url, json={"input": input_params}, headers=headers)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error starting Apify task: {e}")
+    
+        # Get the run ID from the response
+        data = response.json()
+        run_id = data['data']['id']
+        st.write(f"Run ID: {run_id}")  # Display the run ID in Streamlit
+
+
+        # Loop through each row (input_dict) and add the GCS URL
+        input_list_of_dicts = df.to_dict(orient="records")
+        for input_dict in input_list_of_dicts:
+            clean_url = input_dict["Links"]
+            video_id = clean_url.split("?")[0].split("/")[-1]
+            input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
+            input_dict["Gif Url"] = f"https://storage.googleapis.com/tiktok-actor-content/gifs_20240419/{video_id}.gif"
+
+        # Optionally, you can save this updated data to a new Excel file
+        output_df = pd.DataFrame(input_list_of_dicts)
+        output_file_name = 'updated_tiktok_urls.xlsx'  # The name of the updated file
+        output_df.to_excel(output_file_name, index=False)
+
+        st.success(f"Updated Excel file saved as {output_file_name}")
+
+
+        if check_apify_run_status(run_id, API_TOKEN):
+            process_videos_from_excel(input_excel, 'Sheet1')
+        else:
+            st.error("The Apify run failed or could not be completed.")
+
