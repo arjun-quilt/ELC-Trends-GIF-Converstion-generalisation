@@ -97,7 +97,7 @@ def check_apify_run_status(run_id, api_token):
 
 
 # Function to convert media files to GIFs
-def convert_to_gif(media_file, max_duration=10, fps=10, output_dir='/content/gifs'):
+def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(os.getcwd(), 'gifs')):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -119,7 +119,7 @@ def convert_to_gif(media_file, max_duration=10, fps=10, output_dir='/content/gif
 
 # Function to download video from GCS URL
 
-def download_and_trim_video(url, output_dir='/content/videos', duration=10):
+def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'), duration=10):
     # Ensure the output directory exists
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -172,7 +172,7 @@ def download_and_trim_video(url, output_dir='/content/videos', duration=10):
 
 
 # Function to resize GIFs
-def resize_gif(input_gif, max_size_mb=1.99, processed_dir='/content/processed_gifs'):
+def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd(), 'processed_gifs')):
     if not os.path.exists(processed_dir):
         os.makedirs(processed_dir)
 
@@ -204,7 +204,7 @@ import os
 
 
 #call this function at last
-def process_videos_from_excel(input_excel, sheet_name, output_dir='/content/gifs'):
+def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
     df = pd.read_excel(input_excel, sheet_name=sheet_name)
 
     # Assume GCS URLs are in the "Gcs Url" column
