@@ -5,3 +5,4 @@ pandas
 streamlit
 openpyxl
 google-cloud-storage
+ffmpeg-python
