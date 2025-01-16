@@ -332,7 +332,7 @@ if input_excel:
 
 
         if check_apify_run_status(run_id, API_TOKEN):
-            process_videos_from_excel(input_excel, 'Sheet1')
+            process_videos_from_excel(output_file_name, 'Sheet1')
         else:
             st.error("The Apify run failed or could not be completed.")
 
