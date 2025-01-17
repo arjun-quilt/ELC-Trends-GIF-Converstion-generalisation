@@ -11,7 +11,6 @@ from google.cloud import storage
 import streamlit as st  # Import Streamlit
 import tempfile
 import io  # Import io for BytesIO
-import ffmpeg
 
 ############## function starts #############
 
@@ -237,7 +236,7 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
 ############### function ends ##############
 
 # Streamlit app title
-st.title("TikTok Video Processing App")
+st.title("Elc Trends Gif Converstion")
 
 # Extract the secret
 gcp_secret = st.secrets["gcp_secret"]
