@@ -11,8 +11,7 @@ from google.cloud import storage
 import streamlit as st  # Import Streamlit
 import tempfile
 import io  # Import io for BytesIO
-import ffmpeg
-
+import imageio_ffmpeg as ffmpeg
 ############## function starts #############
 
 def yt_shorts_downloader(urls, bucket_name):
@@ -137,38 +136,26 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 
-    # Step 2: Use ffmpeg to trim the first 10 seconds and save to a new temporary file
+    # Step 2: Use imageio-ffmpeg to trim the video
     trimmed_output = os.path.join(output_dir, f"trimmed_{video_filename}")
-    command = [
-        'ffmpeg',
-        '-i', output_path,  # Input file
-        '-t', str(duration),  # Duration in seconds
-        '-c', 'copy',  # Copy the original codec (avoids re-encoding)
-        '-y',  # Force overwriting the temporary file
-        trimmed_output  # Output file (new file for the trimmed video)
-    ]
+    reader = ffmpeg.get_reader(output_path)  # Use imageio-ffmpeg to read the video
+    writer = ffmpeg.get_writer(trimmed_output, fps=reader.get_meta_data()['fps'])  # Create a writer for the trimmed video
 
-    try:
-        # Run the ffmpeg command to trim the video
-        result = subprocess.run(command, capture_output=True, text=True)
+    for i, frame in enumerate(reader):
+        if i / reader.get_meta_data()['fps'] >= duration:  # Check if the duration limit is reached
+            break
+        writer.append_data(frame)  # Write the frame to the new video
 
-        # Check if ffmpeg encountered any errors
-        if result.returncode != 0:
-            print(f"Error running ffmpeg: {result.stderr}")
-        else:
-            print(f"Video trimmed and saved as {trimmed_output}")
+    writer.close()  # Close the writer
+    reader.close()  # Close the reader
 
-        # Remove the untrimmed video after trimming
-        os.remove(output_path)
+    # Remove the untrimmed video after trimming
+    os.remove(output_path)
 
-        # Rename the trimmed video to the original file name (replace original file)
-        os.rename(trimmed_output, output_path)
+    # Rename the trimmed video to the original file name (replace original file)
+    os.rename(trimmed_output, output_path)
 
-        return output_path  # Return the path to the trimmed video
-
-    except Exception as e:
-        print(f"Failed to trim the video: {e}")
-        return None
+    return output_path  # Return the path to the trimmed video
 
 
 # Function to resize GIFs
