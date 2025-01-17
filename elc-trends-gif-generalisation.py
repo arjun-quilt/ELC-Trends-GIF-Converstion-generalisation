@@ -138,16 +138,12 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
 
     # Step 2: Use imageio-ffmpeg to trim the video
     trimmed_output = os.path.join(output_dir, f"trimmed_{video_filename}")
-    reader = ffmpeg.get_reader(output_path)  # Use imageio-ffmpeg to read the video
-    writer = ffmpeg.get_writer(trimmed_output, fps=reader.get_meta_data()['fps'])  # Create a writer for the trimmed video
+    
+    # Get the ffmpeg executable path
+    ffmpeg_exe = ffmpeg.get_ffmpeg_exe()
 
-    for i, frame in enumerate(reader):
-        if i / reader.get_meta_data()['fps'] >= duration:  # Check if the duration limit is reached
-            break
-        writer.append_data(frame)  # Write the frame to the new video
-
-    writer.close()  # Close the writer
-    reader.close()  # Close the reader
+    # Use ffmpeg to trim the video
+    os.system(f"{ffmpeg_exe} -i {output_path} -t {duration} -c copy {trimmed_output}")
 
     # Remove the untrimmed video after trimming
     os.remove(output_path)
