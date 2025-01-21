@@ -27,7 +27,7 @@ def yt_shorts_downloader(urls, bucket_name):
     for url in urls:
         # Set options for yt-dlp
         ydl_opts = {
-            'format': 'best',
+            'format': 'mp4',
             'outtmpl': '-',  # Output to stdout (this avoids saving it locally)
             'quiet': True,    # Suppress yt-dlp's output
         }
