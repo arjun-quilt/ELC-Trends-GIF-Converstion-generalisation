@@ -11,6 +11,8 @@ from google.cloud import storage
 import streamlit as st  # Import Streamlit
 import tempfile
 import io  # Import io for BytesIO
+import imageio_ffmpeg as iio_ffmpeg
+
 
 ############## function starts #############
 
@@ -125,7 +127,7 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
 
     # Step 1: Download the video using yt-dlp
     ydl_opts = {
-        'format': 'bestvideo+bestaudio/best',  # Adjust format if needed
+        'format': 'mp4',  # Adjust format if needed
         'outtmpl': output_path,  # Save with the same name
     }
 
@@ -134,8 +136,9 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
 
     # Step 2: Use ffmpeg to trim the first 10 seconds and save to a new temporary file
     trimmed_output = os.path.join(output_dir, f"trimmed_{video_filename}")
+    ffmpeg_path = iio_ffmpeg.get_ffmpeg_exe()
     command = [
-        'ffmpeg',
+        ffmpeg_path,
         '-i', output_path,  # Input file
         '-t', str(duration),  # Duration in seconds
         '-c', 'copy',  # Copy the original codec (avoids re-encoding)
