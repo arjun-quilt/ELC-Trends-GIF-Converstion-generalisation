@@ -114,8 +114,16 @@ def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(
         print(f"Failed to convert {media_file}: {e}")
         return None
 
-# Function to download video from GCS URL
+def upload_gif_to_gcs(bucket_name, gif_path):
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    destination_blob = f"gifs_20240419/{os.path.basename(gif_path)}"  # Destination path in GCS
 
+    blob = bucket.blob(destination_blob)
+    blob.upload_from_filename(gif_path, content_type="image/gif")
+    print(f"Uploaded {gif_path} to bucket {bucket_name} at {destination_blob}.")
+
+# Function to download video from GCS URL
 def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'), duration=10):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -193,10 +201,6 @@ def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd
         # If not resizing, just copy the original GIF to the processed directory
         shutil.copy(input_gif, processed_dir)
 
-# Main logic to process an Excel file and convert videos to GIFs
-import os
-
-
 #call this function at last
 def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
     df = pd.read_excel(input_excel, sheet_name=sheet_name)
@@ -216,6 +220,9 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
             # Process the converted GIF to make it smaller than 2 MB
             if gif_path:
                 resize_gif(gif_path)
+
+                # Upload the resized GIF to GCS
+                upload_gif_to_gcs('tiktok-actor-content', gif_path)
 
                 # Delete the GIF after resizing
                 if os.path.exists(gif_path):
