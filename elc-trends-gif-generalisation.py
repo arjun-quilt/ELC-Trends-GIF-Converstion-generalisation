@@ -27,37 +27,33 @@ def yt_shorts_downloader(urls, bucket_name):
     for url in urls:
         # Set options for yt-dlp
         ydl_opts = {
-            'format': 'mp4',
-            'outtmpl': '-',  # Output to stdout (this avoids saving it locally)
+            'format': 'mp4',  # Specify MP4 format
+            'outtmpl': '-',   # Output to stdout (streaming)
             'quiet': True,    # Suppress yt-dlp's output
         }
 
-        # Download video into memory and upload to GCS
+        # Download video and upload to GCS
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             result = ydl.extract_info(url, download=False)
             video_id = result['id']
-            video_ext = result['ext']
 
-            # Stream the video to memory
-            video_data = io.BytesIO(ydl.urlopen(url).read())
+            # Get the actual video content
+            video_content = ydl.urlopen(result['url']).read()
+            video_data = io.BytesIO(video_content)
 
             # Define the destination file name in the bucket
-            destination_blob = f"{video_id}.{video_ext}"
+            destination_blob = f"{video_id}.mp4"
 
-            # Upload to GCS
-            upload_to_gcs(bucket, video_data, destination_blob)
+            # Create a blob in the bucket and upload the video
+            blob = bucket.blob(destination_blob)
+            blob.upload_from_file(video_data, content_type="video/mp4")
 
+            print(f"Uploaded {destination_blob} to bucket {bucket_name}.")
 
+# Helper function to upload to GCS (if needed externally)
 def upload_to_gcs(bucket, video_data, destination_blob):
-    """
-    Uploads the video stream directly to Google Cloud Storage.
-
-    :param bucket: GCS bucket object
-    :param video_data: BytesIO stream containing the video data
-    :param destination_blob: The destination file name in the GCS bucket
-    """
     blob = bucket.blob(destination_blob)
-    blob.upload_from_file(video_data)
+    blob.upload_from_file(video_data, content_type="video/mp4")
     print(f"Video uploaded to {destination_blob} in bucket {bucket.name}.")
 
 
