@@ -117,56 +117,52 @@ def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(
 # Function to download video from GCS URL
 
 def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'), duration=10):
-    # Ensure the output directory exists
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # Extract the filename from the URL and set the output file name
     video_filename = os.path.basename(url)
     output_path = os.path.join(output_dir, video_filename)
 
-    # Step 1: Download the video using yt-dlp
     ydl_opts = {
-        'format': 'mp4',  # Adjust format if needed
-        'outtmpl': output_path,  # Save with the same name
+        'format': 'mp4',
+        'outtmpl': output_path,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    try:
+        import yt_dlp
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    except Exception as e:
+        print(f"Failed to download video: {e}")
+        return None
 
-    # Step 2: Use ffmpeg to trim the first 10 seconds and save to a new temporary file
     trimmed_output = os.path.join(output_dir, f"trimmed_{video_filename}")
-    ffmpeg_path = iio_ffmpeg.get_ffmpeg_exe()
-    command = [
-        ffmpeg_path,
-        '-i', output_path,  # Input file
-        '-t', str(duration),  # Duration in seconds
-        '-c', 'copy',  # Copy the original codec (avoids re-encoding)
-        '-y',  # Force overwriting the temporary file
-        trimmed_output  # Output file (new file for the trimmed video)
-    ]
 
     try:
-        # Run the ffmpeg command to trim the video
-        result = subprocess.run(command, capture_output=True, text=True)
+        ffmpeg_path = iio_ffmpeg.get_ffmpeg_exe()
+        print(f"FFmpeg path: {ffmpeg_path}")
+        command = [
+            ffmpeg_path,
+            '-i', output_path,
+            '-t', str(duration),
+            '-c', 'copy',
+            '-y',
+            trimmed_output
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, env=os.environ)
 
-        # Check if ffmpeg encountered any errors
         if result.returncode != 0:
-            print(f"Error running ffmpeg: {result.stderr}")
-        else:
-            print(f"Video trimmed and saved as {trimmed_output}")
+            print(f"FFmpeg command failed with error: {result.stderr}")
+            return None
 
-        # Remove the untrimmed video after trimming
         os.remove(output_path)
-
-        # Rename the trimmed video to the original file name (replace original file)
         os.rename(trimmed_output, output_path)
-
-        return output_path  # Return the path to the trimmed video
+        return output_path
 
     except Exception as e:
         print(f"Failed to trim the video: {e}")
         return None
+
 
 
 # Function to resize GIFs
