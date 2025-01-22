@@ -14,7 +14,7 @@ import io  # Import io for BytesIO
 import imageio_ffmpeg as iio_ffmpeg
 
 
-############## function starts #############
+############## Helper functions starts #############
 
 def yt_shorts_downloader(urls, bucket_name):
     # Ensure URLs is a list
@@ -113,7 +113,6 @@ def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(
     except Exception as e:
         print(f"Failed to convert {media_file}: {e}")
         return None
-
 def upload_gif_to_gcs(bucket_name, gif_path):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
@@ -137,12 +136,11 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
     }
 
     try:
-        import yt_dlp
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
     except Exception as e:
         print(f"Failed to download video: {e}")
-        return None
+        st.error(f"Failed to download video from URL: {url} - Error: {e}")  # Display the video URL and error message in Streamlit        return None
 
     trimmed_output = os.path.join(output_dir, f"trimmed_{video_filename}")
 
@@ -171,9 +169,34 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
         print(f"Failed to trim the video: {e}")
         return None
 
+def status_check(input_file, sheet_name):
+    invalid_urls = []
+    
+    # Read the file based on its extension
+    if input_file.endswith('.xlsx'):
+        df = pd.read_excel(input_file, sheet_name=sheet_name)
+    elif input_file.endswith('.csv'):
+        df = pd.read_csv(input_file, sheet_name = sheet_name)
+    else:
+        raise ValueError("Unsupported file format. Please provide a .csv or .xlsx file.")
+    
+    # Check if the 'Links' column exists
+    if 'Links' not in df.columns:
+        raise ValueError("The input file must contain a 'Links' column.")
+    
+    urls = df['Links'].tolist()
+    
+    for url in urls:
+        try:
+            response = requests.head(url, timeout=5)  # Use HEAD for faster checks
+            if response.status_code != 200:
+                invalid_urls.append(url)
+        except requests.RequestException as e:
+            invalid_urls.append(url)  # Log the problematic URL
+    
+    return invalid_urls
 
 
-# Function to resize GIFs
 def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd(), 'processed_gifs')):
     if not os.path.exists(processed_dir):
         os.makedirs(processed_dir)
@@ -197,9 +220,13 @@ def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd
         output_gif = os.path.join(processed_dir, f"{base}{ext}")
         clip.write_gif(output_gif, fps=fps)
         print(f"Resized GIF saved as {output_gif}, size: {current_size/1024/1024:.2f} MB")
+        return output_gif if current_size <= max_size_mb * 1024 * 1024 else None  # Return None if still too large
     else:
         # If not resizing, just copy the original GIF to the processed directory
         shutil.copy(input_gif, processed_dir)
+        return input_gif  # Return the original GIF path
+
+
 
 #call this function at last
 def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
@@ -219,15 +246,18 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
 
             # Process the converted GIF to make it smaller than 2 MB
             if gif_path:
-                resize_gif(gif_path)
+                resized_gif_path = resize_gif(gif_path)
 
-                # Upload the resized GIF to GCS
-                upload_gif_to_gcs('tiktok-actor-content', gif_path)
+                # Upload the resized GIF to GCS only if it was resized successfully
+                if resized_gif_path and os.path.exists(resized_gif_path):
+                    upload_gif_to_gcs('tiktok-actor-content', resized_gif_path)
 
-                # Delete the GIF after resizing
-                if os.path.exists(gif_path):
-                    os.remove(gif_path)
-                    print(f"Deleted GIF: {gif_path}")
+                    # Delete the GIF after uploading
+                    os.remove(resized_gif_path)
+                    print(f"Deleted GIF: {resized_gif_path}")
+
+                else:
+                    print(f"Resized GIF is still too large or failed to resize: {gif_path}")
 
             # Delete the video after converting to GIF
             if os.path.exists(video_path):
@@ -235,7 +265,7 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
                 print(f"Deleted video: {video_path}")
 
 
-############### function ends ##############
+############### Helper functions ends ##############
 
 # Streamlit app title
 st.title("Elc Trends Gif Converstion")
@@ -257,6 +287,7 @@ bucket = storage_client.bucket('tiktok-actor-content')
 
 # File uploader for Excel file
 input_excel = st.file_uploader("Upload Excel File", type=["xlsx"])
+st.write("Upload a Excel or Csv sheet Which Contains All The Links In Master_Sheet Tab")
 
 if input_excel:
     # Read the Excel file
@@ -331,9 +362,18 @@ if input_excel:
 
         st.success(f"Updated Excel file saved as {output_file_name}")
 
+        # Add download button for the updated Excel file
+        with open(output_file_name, "rb") as f:
+            st.download_button(
+                label="Download Updated TikTok URLs",
+                data=f,
+                file_name=output_file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
         if check_apify_run_status(run_id, API_TOKEN):
             process_videos_from_excel(output_file_name, 'Sheet1')
+            status_check(output_file_name, "Sheet1")
         else:
             st.error("The Apify run failed or could not be completed.")
 
