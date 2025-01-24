@@ -16,6 +16,18 @@ import imageio_ffmpeg as iio_ffmpeg
 
 ############## Helper functions starts #############
 
+def run_actor_task(data: dict) -> dict:
+    headers = {"Content-Type": "application/json"}
+    url = f"https://api.apify.com/v2/actor-tasks/H70fR5ndjUD0loq5H/runs?token=apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
+    response = requests.post(url, json=data, headers=headers)
+    return response
+
+async def get_items(dataset_id: str) -> dict:
+    # this endpoint is only invoked by internal services and not end user.
+    url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?clean=true"
+    response = requests.get(url)
+    return response.json()
+
 def yt_shorts_downloader(urls, bucket_name):
     # Ensure URLs is a list
     if not isinstance(urls, list):
@@ -169,32 +181,6 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
         print(f"Failed to trim the video: {e}")
         return None
 
-def status_check(input_file, sheet_name):
-    invalid_urls = []
-    
-    # Read the file based on its extension
-    if input_file.endswith('.xlsx'):
-        df = pd.read_excel(input_file, sheet_name=sheet_name)
-    elif input_file.endswith('.csv'):
-        df = pd.read_csv(input_file, sheet_name = sheet_name)
-    else:
-        raise ValueError("Unsupported file format. Please provide a .csv or .xlsx file.")
-    
-    # Check if the 'Links' column exists
-    if 'Links' not in df.columns:
-        raise ValueError("The input file must contain a 'Links' column.")
-    
-    urls = df['Links'].tolist()
-    
-    for url in urls:
-        try:
-            response = requests.head(url, timeout=5)  # Use HEAD for faster checks
-            if response.status_code != 200:
-                invalid_urls.append(url)
-        except requests.RequestException as e:
-            invalid_urls.append(url)  # Log the problematic URL
-    
-    return invalid_urls
 
 
 def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd(), 'processed_gifs')):
@@ -285,14 +271,20 @@ os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_file_path
 storage_client = storage.Client()
 bucket = storage_client.bucket('tiktok-actor-content')
 
-# File uploader for Excel file
-input_excel = st.file_uploader("Upload Excel File", type=["xlsx"])
-st.write("Upload a Excel or Csv sheet Which Contains All The Links In Master_Sheet Tab")
+# File uploader for Excel and CSV files
+input_excel = st.file_uploader("Upload Excel or CSV File", type=["xlsx", "csv"])  # Updated to accept CSV
+st.write("Upload an Excel or CSV sheet in Format: ")
+st.write("Column_Name: Links")
+st.write("Tab_Name: Master_Sheet")
 
 if input_excel:
-    # Read the Excel file
-    df = pd.read_excel(input_excel, sheet_name='Master_Sheet')  # Default sheet name
-    st.write("Data from Excel:", df)
+    # Read the file based on its extension
+    if input_excel.name.endswith('.xlsx'):
+        df = pd.read_excel(input_excel, sheet_name='Master_Sheet')  # Default sheet name for Excel
+    elif input_excel.name.endswith('.csv'):
+        df = pd.read_csv(input_excel)  # Read CSV file
+    st.write("Data from file:", df)
+    st.write('length of input: ', len(df))
 
     # Assume the URLs are in a column named 'Links'
     urls = df['Links'].tolist()
@@ -305,11 +297,14 @@ if input_excel:
 
     # Button to start downloading and processing videos
     if st.button("Download and Process Videos"):
-        # Example usage of yt_shorts_downloader
-        yt_shorts_downloader(
-            urls=youtube_shorts,
-            bucket_name="tiktok-actor-content"
-        )
+        try:
+            with st.spinner("Downloading YouTube Shorts..."):
+                yt_shorts_downloader(
+                    urls=youtube_shorts,
+                    bucket_name="tiktok-actor-content"
+                )
+        except Exception as e:
+            print(f"An error occurred while downloading YouTube Shorts: {e}")
 
         # Input parameters for Apify run
         input_params = {
@@ -322,24 +317,14 @@ if input_excel:
             "shouldDownloadVideos": True,
             "maxProfilesPerQuery": 10,
             "tiktokMemoryMb": "default",
-            "urls": tiktok_videos  # Only use TikTok videos to process in Apify
+            "postURLs": tiktok_videos
         }
-
-        # API token
+        # start task run
+        response = run_actor_task(input_params)
+        # # API token
         API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
 
-        # Task ID for TikTok scraper
-        TASK_ID = "H70fR5ndjUD0loq5H"
 
-        # API request to run the task
-        task_url = f"https://api.apify.com/v2/actor-tasks/quilt-org~tiktok-orchestrator-elc-trends-gifs/runs?token={API_TOKEN}"
-        headers = {"Content-Type": "application/json"}
-
-        try:
-            response = requests.post(task_url, json={"input": input_params}, headers=headers)
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            st.error(f"Error starting Apify task: {e}")
     
         # Get the run ID from the response
         data = response.json()
@@ -362,18 +347,18 @@ if input_excel:
 
         st.success(f"Updated Excel file saved as {output_file_name}")
 
-        # Add download button for the updated Excel file
-        with open(output_file_name, "rb") as f:
-            st.download_button(
-                label="Download Updated TikTok URLs",
-                data=f,
-                file_name=output_file_name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
         if check_apify_run_status(run_id, API_TOKEN):
-            process_videos_from_excel(output_file_name, 'Sheet1')
-            status_check(output_file_name, "Sheet1")
+            with st.spinner("Processing videos..."):
+                process_videos_from_excel(output_file_name, 'Sheet1')
+            
+            # Add download button for the updated Excel file
+            with open(output_file_name, "rb") as f:
+                st.download_button(
+                    label="Download Updated Gif Urls Sheet",
+                    data=f,
+                    file_name=output_file_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
         else:
             st.error("The Apify run failed or could not be completed.")
 
