@@ -12,7 +12,12 @@ import streamlit as st  # Import Streamlit
 import tempfile
 import io  # Import io for BytesIO
 import imageio_ffmpeg as iio_ffmpeg
+import base64
+import tracemalloc
+import gc
 
+# Initialize memory tracking
+tracemalloc.start()
 
 ############## Helper functions starts #############
 
@@ -351,14 +356,11 @@ if input_excel:
             with st.spinner("Processing videos..."):
                 process_videos_from_excel(output_file_name, 'Sheet1')
             
-            # Add download button for the updated Excel file
-            with open(output_file_name, "rb") as f:
-                st.download_button(
-                    label="Download Updated Gif Urls Sheet",
-                    data=f,
-                    file_name=output_file_name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            # Add download link for the updated Excel file
+            st.markdown(f'<a href="data:file/xlsx;base64,{base64.b64encode(open(output_file_name, "rb").read()).decode()}" download="{output_file_name}">Download Updated Gif Urls Sheet</a>', unsafe_allow_html=True)
         else:
             st.error("The Apify run failed or could not be completed.")
+
+# Clean up temporary files and resources
+gc.collect()
 
