@@ -8,9 +8,9 @@ from moviepy.editor import VideoFileClip
 import subprocess
 from yt_dlp.utils import DownloadError
 from google.cloud import storage
-import streamlit as st  # Import Streamlit
+import streamlit as st  
 import tempfile
-import io  # Import io for BytesIO
+import io 
 import imageio_ffmpeg as iio_ffmpeg
 import base64
 import tracemalloc
@@ -223,37 +223,51 @@ def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd
 def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
     df = pd.read_excel(input_excel, sheet_name=sheet_name)
 
-    # Assume GCS URLs are in the "Gcs Url" column
-    for index, row in df.iterrows():
-        video_url = row["Gcs Url"]  # Replace with the correct column name in your Excel
-        print(f"Processing video URL: {video_url}")
+    # Initialize the progress bar
+    progress_bar = st.progress(0)
+    total_videos = len(df)  # Total number of videos to process
 
+    for index, row in df.iterrows():
+        video_url = row["Gcs Url"]
+        print(f"Processing video URL: {video_url}")
 
         video_path = download_and_trim_video(video_url)
 
         if video_path:
-            # Convert to GIF
             gif_path = convert_to_gif(video_path, output_dir=output_dir)
 
-            # Process the converted GIF to make it smaller than 2 MB
             if gif_path:
                 resized_gif_path = resize_gif(gif_path)
 
-                # Upload the resized GIF to GCS only if it was resized successfully
                 if resized_gif_path and os.path.exists(resized_gif_path):
                     upload_gif_to_gcs('tiktok-actor-content', resized_gif_path)
-
-                    # Delete the GIF after uploading
                     os.remove(resized_gif_path)
                     print(f"Deleted GIF: {resized_gif_path}")
 
                 else:
                     print(f"Resized GIF is still too large or failed to resize: {gif_path}")
 
-            # Delete the video after converting to GIF
             if os.path.exists(video_path):
                 os.remove(video_path)
                 print(f"Deleted video: {video_path}")
+
+        # Check the GCS URL status
+        response = requests.head(video_url)  # Use HEAD request to check status
+        if response.status_code != 200:
+            print(f"Removing GCS URL and GIF URL for video URL: {video_url}")
+            df.at[index, "Gcs Url"] = None  # Set GCS URL to None
+            df.at[index, "Gif Url"] = None   # Set GIF URL to None
+
+        # Update the progress bar
+        progress = (index + 1) / total_videos  # Calculate progress
+        progress_bar.progress(progress)  # Update the progress bar
+
+    # Complete the progress bar
+    progress_bar.progress(1.0)  # Set progress to 100%
+
+    # Save the updated DataFrame to a new Excel file after processing
+    output_file_name = 'updated_tiktok_urls.xlsx'  # The name of the updated file
+    df.to_excel(output_file_name, index=False)  # Save the DataFrame to Excel
 
 
 ############### Helper functions ends ##############
@@ -355,9 +369,14 @@ if input_excel:
         if check_apify_run_status(run_id, API_TOKEN):
             with st.spinner("Processing videos..."):
                 process_videos_from_excel(output_file_name, 'Sheet1')
-            
-            # Add download link for the updated Excel file
-            st.markdown(f'<a href="data:file/xlsx;base64,{base64.b64encode(open(output_file_name, "rb").read()).decode()}" download="{output_file_name}">Download Updated Gif Urls Sheet</a>', unsafe_allow_html=True)
+
+            # Use st.download_button for downloading the updated Excel file
+            st.download_button(
+                label="Download Updated Gif Urls Sheet",
+                data=open(output_file_name, "rb").read(),
+                file_name=output_file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         else:
             st.error("The Apify run failed or could not be completed.")
 
