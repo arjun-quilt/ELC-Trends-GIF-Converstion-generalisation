@@ -269,6 +269,9 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
     output_file_name = 'updated_tiktok_urls.xlsx'  # The name of the updated file
     df.to_excel(output_file_name, index=False)  # Save the DataFrame to Excel
 
+    # Final message to indicate completion
+    st.success("All videos processed successfully!")
+
 
 ############### Helper functions ends ##############
 
