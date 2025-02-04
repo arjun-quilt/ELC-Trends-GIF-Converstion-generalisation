@@ -15,6 +15,8 @@ import imageio_ffmpeg as iio_ffmpeg
 import base64
 import tracemalloc
 import gc
+from streamlit_autorefresh import st_autorefresh
+
 
 # Initialize memory tracking
 tracemalloc.start()
@@ -98,7 +100,7 @@ def check_apify_run_status(run_id, api_token):
                 status_message.error("FAILED")  # Update Streamlit with failure message
                 return False  # Explicitly return False for failure
             elif status == 'RUNNING':
-                status_message.info("Run is still in progress...")  # Update Streamlit with running message
+                status_message.info("Apify video download Run is still in progress...")  # Update Streamlit with running message
             else:
                 status_message.warning(f"Unknown status: {status}")  # Update Streamlit with unknown status
 
@@ -275,8 +277,18 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
 
 ############### Helper functions ends ##############
 
+# At the beginning of the script, display messages if they exist
+if 'run_id_message' in st.session_state:
+    st.write(st.session_state.run_id_message)
+
+if 'success_message' in st.session_state:
+    st.success(st.session_state.success_message)
+
 # Streamlit app title
 st.title("Elc Trends Gif Converstion")
+
+# Keep the session alive by auto-refreshing every 5 minutes
+st_autorefresh(interval=5 * 60 * 1000, key="keep-alive-refresh")
 
 # Extract the secret
 gcp_secret = st.secrets["gcp_secret"]
@@ -352,6 +364,7 @@ if input_excel:
         data = response.json()
         run_id = data['data']['id']
         st.write(f"Run ID: {run_id}")  # Display the run ID in Streamlit
+        st.session_state.run_id_message = f"Run ID: {run_id}"  # Store run ID in session state
 
 
         # Loop through each row (input_dict) and add the GCS URL
@@ -370,7 +383,7 @@ if input_excel:
         st.success(f"Updated Excel file saved as {output_file_name}")
 
         if check_apify_run_status(run_id, API_TOKEN):
-            with st.spinner("Processing videos..."):
+            with st.spinner("Converting videos to gifs..."):
                 process_videos_from_excel(output_file_name, 'Sheet1')
 
             # Use st.download_button for downloading the updated Excel file
@@ -385,4 +398,3 @@ if input_excel:
 
 # Clean up temporary files and resources
 gc.collect()
-
