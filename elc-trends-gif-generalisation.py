@@ -287,8 +287,8 @@ if 'success_message' in st.session_state:
 # Streamlit app title
 st.title("Elc Trends Gif Converstion")
 
-# Keep the session alive by auto-refreshing every 5 minutes
-st_autorefresh(interval=5 * 60 * 1000, key="keep-alive-refresh")
+# Keep the session alive by auto-refreshing every 1 minute
+st_autorefresh(interval=1 * 60 * 1000, key="keep-alive-refresh")
 
 # Extract the secret
 gcp_secret = st.secrets["gcp_secret"]
