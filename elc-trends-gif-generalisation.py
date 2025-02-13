@@ -157,7 +157,7 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
             ydl.download([url])
     except Exception as e:
         print(f"Failed to download video: {e}")
-        st.error(f"Failed to download video from URL: {url} - Error: {e}")  # Display the video URL and error message in Streamlit        return None
+        #st.error(f"Failed to download video from URL: {url} - Error: {e}")  # Display the video URL and error message in Streamlit        return None
 
     trimmed_output = os.path.join(output_dir, f"trimmed_{video_filename}")
 
@@ -193,29 +193,34 @@ def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd
         os.makedirs(processed_dir)
 
     clip = VideoFileClip(input_gif)
-    fps = clip.fps  # Frames per second
-    current_size = os.path.getsize(input_gif)
+    try:
+        fps = clip.fps  # Frames per second
+        current_size = os.path.getsize(input_gif)
 
-    if current_size > max_size_mb * 1024 * 1024:
-        reduction_factor = 0.95  # Initial reduction by 5%
-        while current_size > max_size_mb * 1024 * 1024:
-            new_duration = clip.duration * reduction_factor
-            clip = clip.subclip(0, new_duration)
-            clip.write_gif("temp_resized.gif", fps=fps)
-            current_size = os.path.getsize("temp_resized.gif")
-            os.remove("temp_resized.gif")  # Clearing the temporary file
-            reduction_factor *= 0.95  # Reduce the duration further
+        if current_size > max_size_mb * 1024 * 1024:
+            reduction_factor = 0.95  # Initial reduction by 5%
+            while current_size > max_size_mb * 1024 * 1024:
+                new_duration = clip.duration * reduction_factor
+                clip = clip.subclip(0, new_duration)
+                clip.write_gif("temp_resized.gif", fps=fps)
+                current_size = os.path.getsize("temp_resized.gif")
+                os.remove("temp_resized.gif")  # Clearing the temporary file
+                reduction_factor *= 0.95  # Reduce the duration further
 
-        # Save the resized GIF in the processed directory
-        base, ext = os.path.splitext(os.path.basename(input_gif))
-        output_gif = os.path.join(processed_dir, f"{base}{ext}")
-        clip.write_gif(output_gif, fps=fps)
-        print(f"Resized GIF saved as {output_gif}, size: {current_size/1024/1024:.2f} MB")
-        return output_gif if current_size <= max_size_mb * 1024 * 1024 else None  # Return None if still too large
-    else:
-        # If not resizing, just copy the original GIF to the processed directory
-        shutil.copy(input_gif, processed_dir)
-        return input_gif  # Return the original GIF path
+            # Save the resized GIF in the processed directory
+            base, ext = os.path.splitext(os.path.basename(input_gif))
+            output_gif = os.path.join(processed_dir, f"{base}{ext}")
+            clip.write_gif(output_gif, fps=fps)
+            print(f"Resized GIF saved as {output_gif}, size: {current_size/1024/1024:.2f} MB")
+            return output_gif if current_size <= max_size_mb * 1024 * 1024 else None  # Return None if still too large
+        else:
+            # If not resizing, just copy the original GIF to the processed directory
+            shutil.copy(input_gif, processed_dir)
+            return input_gif  # Return the original GIF path
+    finally:
+        clip.close()  # Close the VideoFileClip object
+        del clip  # Delete the VideoFileClip object
+        gc.collect()  # Collect garbage to free up memory
 
 
 
