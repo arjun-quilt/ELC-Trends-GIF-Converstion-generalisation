@@ -15,8 +15,6 @@ import imageio_ffmpeg as iio_ffmpeg
 import base64
 import tracemalloc
 import gc
-from streamlit_autorefresh import st_autorefresh
-
 
 # Initialize memory tracking
 tracemalloc.start()
@@ -100,7 +98,7 @@ def check_apify_run_status(run_id, api_token):
                 status_message.error("FAILED")  # Update Streamlit with failure message
                 return False  # Explicitly return False for failure
             elif status == 'RUNNING':
-                status_message.info("Apify video download Run is still in progress...")  # Update Streamlit with running message
+                status_message.info("Run is still in progress...")  # Update Streamlit with running message
             else:
                 status_message.warning(f"Unknown status: {status}")  # Update Streamlit with unknown status
 
@@ -223,15 +221,25 @@ def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd
 
 #call this function at last
 def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
+    # Clear caches before starting the process
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    
     df = pd.read_excel(input_excel, sheet_name=sheet_name)
-
-    # Initialize the progress bar
     progress_bar = st.progress(0)
-    total_videos = len(df)  # Total number of videos to process
+    total_videos = len(df)
+    
+    counter_placeholder = st.empty()
+    counter_placeholder.text(f"Processed 0/{total_videos} videos")
 
     for index, row in df.iterrows():
         video_url = row["Gcs Url"]
         print(f"Processing video URL: {video_url}")
+
+        # Clear caches periodically (e.g., every 5 videos)
+        if index % 5 == 0:
+            st.cache_data.clear()
+            st.cache_resource.clear()
 
         video_path = download_and_trim_video(video_url)
 
@@ -245,7 +253,6 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
                     upload_gif_to_gcs('tiktok-actor-content', resized_gif_path)
                     os.remove(resized_gif_path)
                     print(f"Deleted GIF: {resized_gif_path}")
-
                 else:
                     print(f"Resized GIF is still too large or failed to resize: {gif_path}")
 
@@ -254,41 +261,35 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
                 print(f"Deleted video: {video_path}")
 
         # Check the GCS URL status
-        response = requests.head(video_url)  # Use HEAD request to check status
+        response = requests.head(video_url)
         if response.status_code != 200:
             print(f"Removing GCS URL and GIF URL for video URL: {video_url}")
-            df.at[index, "Gcs Url"] = None  # Set GCS URL to None
-            df.at[index, "Gif Url"] = None   # Set GIF URL to None
+            df.at[index, "Gcs Url"] = None
+            df.at[index, "Gif Url"] = None
 
-        # Update the progress bar
-        progress = (index + 1) / total_videos  # Calculate progress
-        progress_bar.progress(progress)  # Update the progress bar
+        # Update progress, counter, and collect garbage after each video
+        progress = (index + 1) / total_videos
+        progress_bar.progress(progress)
+        counter_placeholder.text(f"Processed {index + 1}/{total_videos} videos")
+        gc.collect()
 
-    # Complete the progress bar
-    progress_bar.progress(1.0)  # Set progress to 100%
+    # Clear caches after completing all processing
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    
+    progress_bar.progress(1.0)
+    counter_placeholder.text(f"Completed processing all {total_videos} videos!")
 
-    # Save the updated DataFrame to a new Excel file after processing
-    output_file_name = 'updated_tiktok_urls.xlsx'  # The name of the updated file
-    df.to_excel(output_file_name, index=False)  # Save the DataFrame to Excel
-
-    # Final message to indicate completion
+    output_file_name = 'updated_tiktok_urls.xlsx'
+    df.to_excel(output_file_name, index=False)
     st.success("All videos processed successfully!")
+    gc.collect()
 
 
 ############### Helper functions ends ##############
 
-# At the beginning of the script, display messages if they exist
-if 'run_id_message' in st.session_state:
-    st.write(st.session_state.run_id_message)
-
-if 'success_message' in st.session_state:
-    st.success(st.session_state.success_message)
-
 # Streamlit app title
 st.title("Elc Trends Gif Converstion")
-
-# Keep the session alive by auto-refreshing every 1 minute
-st_autorefresh(interval=1 * 60 * 1000, key="keep-alive-refresh")
 
 # Extract the secret
 gcp_secret = st.secrets["gcp_secret"]
@@ -331,12 +332,17 @@ if input_excel:
 
     # Button to start downloading and processing videos
     if st.button("Download and Process Videos"):
+        # Clear caches before starting the download process
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        
         try:
             with st.spinner("Downloading YouTube Shorts..."):
                 yt_shorts_downloader(
                     urls=youtube_shorts,
                     bucket_name="tiktok-actor-content"
                 )
+                gc.collect()
         except Exception as e:
             print(f"An error occurred while downloading YouTube Shorts: {e}")
 
@@ -364,7 +370,6 @@ if input_excel:
         data = response.json()
         run_id = data['data']['id']
         st.write(f"Run ID: {run_id}")  # Display the run ID in Streamlit
-        st.session_state.run_id_message = f"Run ID: {run_id}"  # Store run ID in session state
 
 
         # Loop through each row (input_dict) and add the GCS URL
@@ -383,10 +388,13 @@ if input_excel:
         st.success(f"Updated Excel file saved as {output_file_name}")
 
         if check_apify_run_status(run_id, API_TOKEN):
-            with st.spinner("Converting videos to gifs..."):
+            with st.spinner("Processing videos..."):
                 process_videos_from_excel(output_file_name, 'Sheet1')
-
-            # Use st.download_button for downloading the updated Excel file
+            
+            # Clear caches before file download
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            
             st.download_button(
                 label="Download Updated Gif Urls Sheet",
                 data=open(output_file_name, "rb").read(),
