@@ -378,13 +378,15 @@ if input_excel:
     gcs_videos = []
     
     for url in urls:
-        if isinstance(url, str):
-            if "storage.googleapis.com" in url:
-                gcs_videos.append(url)
-            elif url.split("/")[-1].isdigit():
-                tiktok_videos.append(url)
-            elif any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1]):
-                youtube_shorts.append(url)
+        # Add null/empty check
+        if pd.isna(url) or not isinstance(url, str) or url.strip() == '':
+            continue
+        if "storage.googleapis.com" in url:
+            gcs_videos.append(url)
+        elif url.split("/")[-1].isdigit():
+            tiktok_videos.append(url)
+        elif any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1]):
+            youtube_shorts.append(url)
 
     # Button to start downloading and processing videos
     if st.button("Download and Process Videos"):
