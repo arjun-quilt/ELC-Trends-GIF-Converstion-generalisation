@@ -396,67 +396,85 @@ if input_excel:
     st.write('length of input: ', len(df))
 
     if processing_type == "TikTok/YouTube Shorts":
-        # Filter out non-string values and convert to list
-        urls = [str(url) for url in df['Links'].tolist() if pd.notna(url)]
-        tiktok_videos = [url for url in urls if url.split("/")[-1].isdigit()]
-        youtube_shorts = [url for url in urls if any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1])]
-
-        if st.button("Download and Process Videos"):
-            # Clear caches before starting
-            st.cache_data.clear()
-            st.cache_resource.clear()
+        # Filter out empty values, NaN, and whitespace-only strings
+        urls = [str(url).strip() for url in df['Links'].tolist() 
+                if pd.notna(url) and str(url).strip() and str(url).strip().lower() != 'nan']
+        
+        if not urls:
+            st.warning("No valid URLs found in the Links column. Please check your input file.")
+        else:
+            # Add error handling for URL processing
+            tiktok_videos = []
+            youtube_shorts = []
             
-            try:
-                with st.spinner("Downloading YouTube Shorts..."):
-                    yt_shorts_downloader(urls=youtube_shorts, bucket_name="tiktok-actor-content")
-                    gc.collect()
-            except Exception as e:
-                print(f"An error occurred while downloading YouTube Shorts: {e}")
+            for url in urls:
+                try:
+                    if url.split("/")[-1].isdigit():
+                        tiktok_videos.append(url)
+                    elif any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1]):
+                        youtube_shorts.append(url)
+                except (IndexError, AttributeError):
+                    print(f"Skipping invalid URL: {url}")
+                    continue
 
-            input_params = {
-                "disableCheerioBoost": False,
-                "disableEnrichAuthorStats": False,
-                "resultsPerPage": 1,
-                "searchSection": "/video",
-                "shouldDownloadCovers": True,
-                "shouldDownloadSlideshowImages": False,
-                "shouldDownloadVideos": True,
-                "maxProfilesPerQuery": 10,
-                "tiktokMemoryMb": "default",
-                "postURLs": tiktok_videos
-            }
-            response = run_actor_task(input_params)
-            API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
+            st.write(f"Found {len(tiktok_videos)} TikTok videos and {len(youtube_shorts)} YouTube shorts")
+            
+            if st.button("Download and Process Videos"):
+                if not tiktok_videos and not youtube_shorts:
+                    st.warning("No valid videos to process. Please check your input URLs.")
+                else:
+                    # Rest of your processing code...
+                    try:
+                        with st.spinner("Downloading YouTube Shorts..."):
+                            yt_shorts_downloader(urls=youtube_shorts, bucket_name="tiktok-actor-content")
+                            gc.collect()
+                    except Exception as e:
+                        st.error(f"An error occurred while downloading YouTube Shorts: {e}")
 
-            data = response.json()
-            run_id = data['data']['id']
-            st.write(f"Run ID: {run_id}")
+                    input_params = {
+                        "disableCheerioBoost": False,
+                        "disableEnrichAuthorStats": False,
+                        "resultsPerPage": 1,
+                        "searchSection": "/video",
+                        "shouldDownloadCovers": True,
+                        "shouldDownloadSlideshowImages": False,
+                        "shouldDownloadVideos": True,
+                        "maxProfilesPerQuery": 10,
+                        "tiktokMemoryMb": "default",
+                        "postURLs": tiktok_videos
+                    }
+                    response = run_actor_task(input_params)
+                    API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
 
-            input_list_of_dicts = df.to_dict(orient="records")
-            for input_dict in input_list_of_dicts:
-                clean_url = input_dict["Links"]
-                video_id = clean_url.split("?")[0].split("/")[-1]
-                input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
-                input_dict["Gif Url"] = f"https://storage.googleapis.com/tiktok-actor-content/gifs_20240419/{video_id}.gif"
+                    data = response.json()
+                    run_id = data['data']['id']
+                    st.write(f"Run ID: {run_id}")
 
-            output_df = pd.DataFrame(input_list_of_dicts)
-            output_file_name = 'updated_tiktok_urls.xlsx'
-            output_df.to_excel(output_file_name, index=False)
+                    input_list_of_dicts = df.to_dict(orient="records")
+                    for input_dict in input_list_of_dicts:
+                        clean_url = input_dict["Links"]
+                        video_id = clean_url.split("?")[0].split("/")[-1]
+                        input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
+                        input_dict["Gif Url"] = f"https://storage.googleapis.com/tiktok-actor-content/gifs_20240419/{video_id}.gif"
 
-            st.success(f"Updated Excel file saved as {output_file_name}")
+                    output_df = pd.DataFrame(input_list_of_dicts)
+                    output_file_name = 'updated_tiktok_urls.xlsx'
+                    output_df.to_excel(output_file_name, index=False)
 
-            if check_apify_run_status(run_id, API_TOKEN):
-                with st.spinner("Processing videos..."):
-                    process_videos_from_excel(output_file_name, 'Sheet1')
-                
-                st.download_button(
-                    label="Download Updated Gif Urls Sheet",
-                    data=open(output_file_name, "rb").read(),
-                    file_name=output_file_name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            else:
-                st.error("The Apify run failed or could not be completed.")
+                    st.success(f"Updated Excel file saved as {output_file_name}")
+
+                    if check_apify_run_status(run_id, API_TOKEN):
+                        with st.spinner("Processing videos..."):
+                            process_videos_from_excel(output_file_name, 'Sheet1')
+                        
+                        st.download_button(
+                            label="Download Updated Gif Urls Sheet",
+                            data=open(output_file_name, "rb").read(),
+                            file_name=output_file_name,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    else:
+                        st.error("The Apify run failed or could not be completed.")
 
     else:  # GCS URLs processing
         if st.button("Process GCS Videos"):
