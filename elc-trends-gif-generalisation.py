@@ -130,6 +130,9 @@ def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(
     except Exception as e:
         print(f"Failed to convert {media_file}: {e}")
         return None
+    finally:
+        gc.collect()  # Add garbage collection after processing
+
 def upload_gif_to_gcs(bucket_name, gif_path):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
@@ -245,6 +248,7 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
         if index % 5 == 0:
             st.cache_data.clear()
             st.cache_resource.clear()
+            gc.collect()
 
         video_path = download_and_trim_video(video_url)
 
@@ -281,6 +285,7 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
     # Clear caches after completing all processing
     st.cache_data.clear()
     st.cache_resource.clear()
+    gc.collect()
     
     progress_bar.progress(1.0)
     counter_placeholder.text(f"Completed processing all {total_videos} videos!")
@@ -399,6 +404,7 @@ if input_excel:
             # Clear caches before file download
             st.cache_data.clear()
             st.cache_resource.clear()
+            gc.collect()
             
             st.download_button(
                 label="Download Updated Gif Urls Sheet",
