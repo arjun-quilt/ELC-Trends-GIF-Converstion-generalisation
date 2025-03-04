@@ -450,18 +450,43 @@ if input_excel:
                     run_id = data['data']['id']
                     st.write(f"Run ID: {run_id}")
 
-                    input_list_of_dicts = df.to_dict(orient="records")
-                    for input_dict in input_list_of_dicts:
-                        clean_url = input_dict["Links"]
-                        video_id = clean_url.split("?")[0].split("/")[-1]
-                        input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
-                        input_dict["Gif Url"] = f"https://storage.googleapis.com/tiktok-actor-content/gifs_20240419/{video_id}.gif"
+                    # Process all rows, including empty ones
+                    input_list_of_dicts = []
+                    for _, row in df.iterrows():
+                        try:
+                            clean_url = str(row["Links"]).strip() if pd.notna(row["Links"]) else ""
+                            if clean_url:
+                                video_id = clean_url.split("?")[0].split("/")[-1]
+                                input_dict = {
+                                    "Links": clean_url,
+                                    "Gcs Url": f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4",
+                                    "Gif Url": f"https://storage.googleapis.com/tiktok-actor-content/gifs_20240419/{video_id}.gif"
+                                }
+                            else:
+                                # Handle empty or invalid URLs
+                                input_dict = {
+                                    "Links": "",
+                                    "Gcs Url": None,
+                                    "Gif Url": None
+                                }
+                            input_list_of_dicts.append(input_dict)
+                        except (AttributeError, IndexError) as e:
+                            print(f"Error processing URL: {row['Links']} - {str(e)}")
+                            input_dict = {
+                                "Links": str(row["Links"]) if pd.notna(row["Links"]) else "",
+                                "Gcs Url": None,
+                                "Gif Url": None
+                            }
+                            input_list_of_dicts.append(input_dict)
 
                     output_df = pd.DataFrame(input_list_of_dicts)
                     output_file_name = 'updated_tiktok_urls.xlsx'
                     output_df.to_excel(output_file_name, index=False)
 
                     st.success(f"Updated Excel file saved as {output_file_name}")
+                    st.write(f"Total rows processed: {len(output_df)}")
+                    st.write(f"Valid URLs: {len(output_df[output_df['Gcs Url'].notna()])}")
+                    st.write(f"Invalid/Empty URLs: {len(output_df[output_df['Gcs Url'].isna()])}")
 
                     if check_apify_run_status(run_id, API_TOKEN):
                         with st.spinner("Processing videos..."):
