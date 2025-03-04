@@ -396,8 +396,8 @@ if input_excel:
     st.write('length of input: ', len(df))
 
     if processing_type == "TikTok/YouTube Shorts":
-        # Existing TikTok and YouTube Shorts processing
-        urls = df['Links'].tolist()
+        # Filter out non-string values and convert to list
+        urls = [str(url) for url in df['Links'].tolist() if pd.notna(url)]
         tiktok_videos = [url for url in urls if url.split("/")[-1].isdigit()]
         youtube_shorts = [url for url in urls if any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1])]
 
