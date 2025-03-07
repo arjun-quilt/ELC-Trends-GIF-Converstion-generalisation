@@ -280,18 +280,32 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
     st.cache_resource.clear()
     
     df = pd.read_excel(input_excel, sheet_name=sheet_name)
+    # Instead of dropping rows, count valid URLs
+    valid_urls = df[~df['Gcs Url'].isna()]['Gcs Url'].tolist()
+    
     progress_bar = st.progress(0)
-    total_videos = len(df)
+    total_videos = len(valid_urls)
+    processed_count = 0
+    
+    if total_videos == 0:
+        st.warning("No valid videos to process.")
+        return df  # Return the original dataframe without modifications
     
     counter_placeholder = st.empty()
     counter_placeholder.text(f"Processed 0/{total_videos} videos")
 
     for index, row in df.iterrows():
         video_url = row["Gcs Url"]
+        
+        # Skip if video_url is None or NaN but keep the row
+        if pd.isna(video_url) or not isinstance(video_url, str):
+            print(f"Skipping invalid URL at index {index}")
+            continue
+            
         print(f"Processing video URL: {video_url}")
 
         # Clear caches periodically (e.g., every 5 videos)
-        if index % 5 == 0:
+        if processed_count > 0 and processed_count % 5 == 0:
             st.cache_data.clear()
             st.cache_resource.clear()
 
@@ -307,6 +321,8 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
                     upload_gif_to_gcs('tiktok-actor-content', resized_gif_path)
                     os.remove(resized_gif_path)
                     print(f"Deleted GIF: {resized_gif_path}")
+                    # Only increment counter after successful processing
+                    processed_count += 1
                 else:
                     print(f"Resized GIF is still too large or failed to resize: {gif_path}")
 
@@ -322,9 +338,9 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
             df.at[index, "Gif Url"] = None
 
         # Update progress, counter, and collect garbage after each video
-        progress = (index + 1) / total_videos
+        progress = min(processed_count / total_videos, 1.0)  # Ensure progress never exceeds 1.0
         progress_bar.progress(progress)
-        counter_placeholder.text(f"Processed {index + 1}/{total_videos} videos")
+        counter_placeholder.text(f"Processed {processed_count}/{total_videos} videos")
         gc.collect()
 
     # Clear caches after completing all processing
@@ -332,12 +348,13 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
     st.cache_resource.clear()
     
     progress_bar.progress(1.0)
-    counter_placeholder.text(f"Completed processing all {total_videos} videos!")
+    counter_placeholder.text(f"Completed processing all {processed_count}/{total_videos} videos!")
 
     output_file_name = 'updated_tiktok_urls.xlsx'
     df.to_excel(output_file_name, index=False)
-    st.success("All videos processed successfully!")
+    st.success(f"All videos processed successfully! Processed {processed_count} out of {total_videos} videos.")
     gc.collect()
+    return df  # Return the updated dataframe
 
 
 ############### Helper functions ends ##############
@@ -375,14 +392,17 @@ if input_excel:
     st.write("Data from file:", df)
     st.write('length of input: ', len(df))
 
-    # Assume the URLs are in a column named 'Links'
-    urls = df['Links'].dropna().tolist()  # Drop NaN values before converting to list
+    # Create a copy of the dataframe to preserve all data
+    processed_df = df.copy()
+
+    # Get valid URLs (non-empty) from Links column
+    valid_urls = df['Links'].dropna().tolist()  # Drop NaN values before converting to list
 
     # TikTok Videos: Last part of the URL contains only numbers
-    tiktok_videos = [url for url in urls if isinstance(url, str) and url.split("/")[-1].isdigit()]
+    tiktok_videos = [url for url in valid_urls if isinstance(url, str) and url.split("/")[-1].isdigit()]
 
     # YouTube Shorts: Last part of the URL contains both numbers and letters
-    youtube_shorts = [url for url in urls if isinstance(url, str) and any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1])]
+    youtube_shorts = [url for url in valid_urls if isinstance(url, str) and any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1])]
 
     # Button to start downloading and processing videos
     if st.button("Download and Process Videos"):
@@ -418,32 +438,38 @@ if input_excel:
         # # API token
         API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
 
-
-    
         # Get the run ID from the response
         data = response.json()
         run_id = data['data']['id']
         st.write(f"Run ID: {run_id}")  # Display the run ID in Streamlit
 
+        # Process each row and update GCS/GIF URLs only for valid links
+        for index, row in processed_df.iterrows():
+            # Preserve the existing data column and other columns
+            if pd.isna(row["Links"]) or not isinstance(row["Links"], str):
+                # Keep existing data and URLs if they exist
+                if "Gcs Url" not in processed_df.columns:
+                    processed_df.at[index, "Gcs Url"] = None
+                if "Gif Url" not in processed_df.columns:
+                    processed_df.at[index, "Gif Url"] = None
+            else:
+                # Process valid links
+                clean_url = row["Links"]
+                video_id = clean_url.split("?")[0].split("/")[-1]
+                processed_df.at[index, "Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
+                processed_df.at[index, "Gif Url"] = f"https://storage.googleapis.com/tiktok-actor-content/gifs_20240419/{video_id}.gif"
 
-        # Loop through each row (input_dict) and add the GCS URL
-        input_list_of_dicts = df.to_dict(orient="records")
-        for input_dict in input_list_of_dicts:
-            clean_url = input_dict["Links"]
-            video_id = clean_url.split("?")[0].split("/")[-1]
-            input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
-            input_dict["Gif Url"] = f"https://storage.googleapis.com/tiktok-actor-content/gifs_20240419/{video_id}.gif"
-
-        # Optionally, you can save this updated data to a new Excel file
-        output_df = pd.DataFrame(input_list_of_dicts)
-        output_file_name = 'updated_tiktok_urls.xlsx'  # The name of the updated file
-        output_df.to_excel(output_file_name, index=False)
-
+        # Save the updated data to Excel file
+        output_file_name = 'updated_tiktok_urls.xlsx'
+        processed_df.to_excel(output_file_name, index=False)
         st.success(f"Updated Excel file saved as {output_file_name}")
 
         if check_apify_run_status(run_id, API_TOKEN):
             with st.spinner("Processing videos..."):
-                process_videos_from_excel(output_file_name, 'Sheet1')
+                # Process videos and get the updated dataframe
+                final_df = process_videos_from_excel(output_file_name, 'Sheet1')
+                # Save the final results
+                final_df.to_excel(output_file_name, index=False)
             
             # Clear caches before file download
             st.cache_data.clear()
