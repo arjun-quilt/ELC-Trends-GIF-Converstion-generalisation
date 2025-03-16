@@ -7,7 +7,5 @@ openpyxl
 google-cloud-storage
 ffmpeg-python
 imageio[ffmpeg]
-tracemalloc
 aiohttp
 asyncio
-typing-extensions
