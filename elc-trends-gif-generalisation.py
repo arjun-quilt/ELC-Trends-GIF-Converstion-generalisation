@@ -15,111 +15,11 @@ import imageio_ffmpeg as iio_ffmpeg
 import base64
 import tracemalloc
 import gc
-import aiohttp
-import asyncio
-from typing import List
 
 # Initialize memory tracking
 tracemalloc.start()
 
 ############## Helper functions starts #############
-
-async def run_actor_task(data: dict):
-    """Async version of run_actor_task"""
-    headers = {"Content-Type": "application/json"}
-    url = f"https://api.apify.com/v2/actor-tasks/H70fR5ndjUD0loq5H/runs?token=apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=data, headers=headers) as response:
-            return await response.json()
-
-async def check_run_status(run_id: str, api_token: str, status_placeholder) -> bool:
-    """Check status of a single Apify run"""
-    url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={api_token}"
-    max_retries = 3
-    retry_delay = 5
-
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        run_data = await response.json()
-                        status = run_data.get('data', {}).get('status')
-                        
-                        if status == 'SUCCEEDED':
-                            status_placeholder.success(f"Run {run_id}: SUCCEEDED")
-                            return True
-                        elif status == 'FAILED':
-                            status_placeholder.error(f"Run {run_id}: FAILED")
-                            return False
-                        elif status == 'RUNNING':
-                            status_placeholder.info(f"Run {run_id}: Still running...")
-                            await asyncio.sleep(5)
-                        else:
-                            status_placeholder.warning(f"Run {run_id}: Unknown status - {status}")
-                            return False
-                    else:
-                        raise Exception(f"HTTP {response.status}")
-
-            except Exception as e:
-                status_placeholder.warning(f"Run {run_id}: Request failed - {str(e)}")
-                await asyncio.sleep(retry_delay)
-
-async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
-    """Process all TikTok videos in parallel batches"""
-    if not tiktok_videos:
-        return True
-
-    # Split videos into batches
-    batches = [tiktok_videos[i:i + batch_size] for i in range(0, len(tiktok_videos), batch_size)]
-    
-    status_placeholder = st.empty()
-    
-    # Start all batches
-    with st.spinner(f"Processing {len(tiktok_videos)} TikTok videos in {len(batches)} batches..."):
-        try:
-            # Launch all actor tasks
-            tasks = []
-            for batch in batches:
-                input_params = {
-                    "disableCheerioBoost": False,
-                    "disableEnrichAuthorStats": False,
-                    "resultsPerPage": 1,
-                    "searchSection": "/video",
-                    "shouldDownloadCovers": True,
-                    "shouldDownloadSlideshowImages": False,
-                    "shouldDownloadVideos": True,
-                    "maxProfilesPerQuery": 10,
-                    "tiktokMemoryMb": "default",
-                    "postURLs": batch
-                }
-                tasks.append(run_actor_task(input_params))
-            
-            responses = await asyncio.gather(*tasks)
-            run_ids = [response['data']['id'] for response in responses]
-            st.write(f"Started {len(run_ids)} Apify runs")
-
-            # Check status of all runs
-            status_tasks = []
-            API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
-            for run_id in run_ids:
-                status_tasks.append(check_run_status(run_id, API_TOKEN, status_placeholder))
-            
-            with st.spinner("Waiting for all TikTok video downloads to complete..."):
-                results = await asyncio.gather(*status_tasks)
-                
-                if all(results):
-                    st.success("All TikTok videos processed successfully!")
-                    return True
-                else:
-                    failed_runs = sum(1 for r in results if not r)
-                    st.error(f"Failed to process {failed_runs} batches of TikTok videos")
-                    return False
-                    
-        except Exception as e:
-            st.error(f"Error processing TikTok videos: {str(e)}")
-            return False
 
 def yt_shorts_downloader(urls, bucket_name):
     # Ensure URLs is a list
@@ -190,63 +90,6 @@ def upload_to_gcs(bucket, video_data, destination_blob):
     blob.upload_from_file(video_data, content_type="video/mp4")
     print(f"Video uploaded to {destination_blob} in bucket {bucket.name}.")
 
-
-def check_apify_run_status(run_id, api_token):
-    url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={api_token}"
-    
-    # Streamlit component to display status
-    status_message = st.empty()  # Create an empty placeholder for status updates
-    max_retries = 3
-    retry_delay = 5
-    timeout = 30  # seconds
-
-    while True:
-        for retry in range(max_retries):
-            try:
-                response = requests.get(url, timeout=timeout)
-                
-                if response.status_code == 200:
-                    run_data = response.json()
-                    status = run_data.get('data', {}).get('status')
-
-                    if status == 'SUCCEEDED':
-                        status_message.success("SUCCEEDED")
-                        return True
-                    elif status == 'FAILED':
-                        status_message.error("FAILED")
-                        return False
-                    elif status == 'RUNNING':
-                        status_message.info("Run is still in progress...")
-                        break  # Break retry loop on successful check
-                    else:
-                        status_message.warning(f"Unknown status: {status}")
-                        break  # Break retry loop on successful check
-                else:
-                    if retry < max_retries - 1:
-                        status_message.warning(f"Request failed (attempt {retry + 1}/{max_retries}). Retrying...")
-                        time.sleep(retry_delay)
-                    else:
-                        status_message.error(f"Error fetching run status: {response.status_code}, {response.text}")
-                        return False
-
-            except requests.exceptions.Timeout:
-                if retry < max_retries - 1:
-                    status_message.warning(f"Request timed out (attempt {retry + 1}/{max_retries}). Retrying...")
-                    time.sleep(retry_delay)
-                else:
-                    status_message.error("Failed to check status due to timeout after multiple retries")
-                    return False
-            except requests.exceptions.RequestException as e:
-                if retry < max_retries - 1:
-                    status_message.warning(f"Request failed (attempt {retry + 1}/{max_retries}): {str(e)}. Retrying...")
-                    time.sleep(retry_delay)
-                else:
-                    status_message.error(f"Failed to check status after multiple retries: {str(e)}")
-                    return False
-
-        # Wait before next status check
-        time.sleep(5)
-
 # Function to convert media files to GIFs
 def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(os.getcwd(), 'gifs')):
     if not os.path.exists(output_dir):
@@ -267,6 +110,7 @@ def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(
     except Exception as e:
         print(f"Failed to convert {media_file}: {e}")
         return None
+
 def upload_gif_to_gcs(bucket_name, gif_path):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
@@ -323,8 +167,6 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
         print(f"Failed to trim the video: {e}")
         return None
 
-
-
 def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd(), 'processed_gifs')):
     if not os.path.exists(processed_dir):
         os.makedirs(processed_dir)
@@ -358,8 +200,6 @@ def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd
         clip.close()  # Close the VideoFileClip object
         del clip  # Delete the VideoFileClip object
         gc.collect()  # Collect garbage to free up memory
-
-
 
 #call this function at last
 def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
@@ -444,8 +284,6 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
     gc.collect()
     return df  # Return the updated dataframe
 
-
-
 ############### Helper functions ends ##############
 
 # Streamlit app title
@@ -520,13 +358,6 @@ if input_excel:
             except Exception as e:
                 print(f"An error occurred while downloading YouTube Shorts: {e}")
         
-        # Process TikTok videos using async
-        if tiktok_videos:
-            success = asyncio.run(process_tiktok_videos(tiktok_videos))
-            if not success:
-                st.error("TikTok video processing failed")
-                
-
         # Process each row and update GCS/GIF URLs
         for index, row in processed_df.iterrows():
             # Preserve the existing data column and other columns
@@ -543,7 +374,7 @@ if input_excel:
                 if clean_url.startswith("https://storage.googleapis.com/tiktok-actor-content/"):
                     processed_df.at[index, "Gcs Url"] = clean_url
                 else:
-                    # For TikTok/YouTube URLs, create new GCS URL
+                    # For YouTube URLs, create new GCS URL
                     video_id = clean_url.split("?")[0].split("/")[-1]
                     processed_df.at[index, "Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
                 
