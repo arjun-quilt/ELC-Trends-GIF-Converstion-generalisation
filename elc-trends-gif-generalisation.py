@@ -21,6 +21,18 @@ tracemalloc.start()
 
 ############## Helper functions starts #############
 
+def run_actor_task(data: dict) -> dict:
+    headers = {"Content-Type": "application/json"}
+    url = f"https://api.apify.com/v2/actor-tasks/H70fR5ndjUD0loq5H/runs?token=apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
+    response = requests.post(url, json=data, headers=headers)
+    return response
+
+async def get_items(dataset_id: str) -> dict:
+    # this endpoint is only invoked by internal services and not end user.
+    url = f"https://api.apify.com/v2/datasets/{dataset_id}/items?clean=true"
+    response = requests.get(url)
+    return response.json()
+
 def yt_shorts_downloader(urls, bucket_name):
     # Ensure URLs is a list
     if not isinstance(urls, list):
@@ -90,6 +102,63 @@ def upload_to_gcs(bucket, video_data, destination_blob):
     blob.upload_from_file(video_data, content_type="video/mp4")
     print(f"Video uploaded to {destination_blob} in bucket {bucket.name}.")
 
+
+def check_apify_run_status(run_id, api_token):
+    url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={api_token}"
+    
+    # Streamlit component to display status
+    status_message = st.empty()  # Create an empty placeholder for status updates
+    max_retries = 3
+    retry_delay = 5
+    timeout = 30  # seconds
+
+    while True:
+        for retry in range(max_retries):
+            try:
+                response = requests.get(url, timeout=timeout)
+                
+                if response.status_code == 200:
+                    run_data = response.json()
+                    status = run_data.get('data', {}).get('status')
+
+                    if status == 'SUCCEEDED':
+                        status_message.success("SUCCEEDED")
+                        return True
+                    elif status == 'FAILED':
+                        status_message.error("FAILED")
+                        return False
+                    elif status == 'RUNNING':
+                        status_message.info("Run is still in progress...")
+                        break  # Break retry loop on successful check
+                    else:
+                        status_message.warning(f"Unknown status: {status}")
+                        break  # Break retry loop on successful check
+                else:
+                    if retry < max_retries - 1:
+                        status_message.warning(f"Request failed (attempt {retry + 1}/{max_retries}). Retrying...")
+                        time.sleep(retry_delay)
+                    else:
+                        status_message.error(f"Error fetching run status: {response.status_code}, {response.text}")
+                        return False
+
+            except requests.exceptions.Timeout:
+                if retry < max_retries - 1:
+                    status_message.warning(f"Request timed out (attempt {retry + 1}/{max_retries}). Retrying...")
+                    time.sleep(retry_delay)
+                else:
+                    status_message.error("Failed to check status due to timeout after multiple retries")
+                    return False
+            except requests.exceptions.RequestException as e:
+                if retry < max_retries - 1:
+                    status_message.warning(f"Request failed (attempt {retry + 1}/{max_retries}): {str(e)}. Retrying...")
+                    time.sleep(retry_delay)
+                else:
+                    status_message.error(f"Failed to check status after multiple retries: {str(e)}")
+                    return False
+
+        # Wait before next status check
+        time.sleep(5)
+
 # Function to convert media files to GIFs
 def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(os.getcwd(), 'gifs')):
     if not os.path.exists(output_dir):
@@ -110,7 +179,6 @@ def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(
     except Exception as e:
         print(f"Failed to convert {media_file}: {e}")
         return None
-
 def upload_gif_to_gcs(bucket_name, gif_path):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
@@ -167,6 +235,8 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
         print(f"Failed to trim the video: {e}")
         return None
 
+
+
 def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd(), 'processed_gifs')):
     if not os.path.exists(processed_dir):
         os.makedirs(processed_dir)
@@ -200,6 +270,8 @@ def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd
         clip.close()  # Close the VideoFileClip object
         del clip  # Delete the VideoFileClip object
         gc.collect()  # Collect garbage to free up memory
+
+
 
 #call this function at last
 def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
@@ -284,6 +356,7 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
     gc.collect()
     return df  # Return the updated dataframe
 
+
 ############### Helper functions ends ##############
 
 # Streamlit app title
@@ -325,20 +398,11 @@ if input_excel:
     # Get valid URLs (non-empty) from Links column
     valid_urls = df['Links'].dropna().tolist()  # Drop NaN values before converting to list
 
-    # Classify URLs more precisely
-    youtube_shorts = [url for url in valid_urls if isinstance(url, str) and 
-                     ('youtube.com' in url.lower() or 'youtu.be' in url.lower())]
+    # TikTok Videos: Last part of the URL contains only numbers
+    tiktok_videos = [url for url in valid_urls if isinstance(url, str) and url.split("/")[-1].isdigit()]
 
-    gcs_urls = [url for url in valid_urls if isinstance(url, str) and 
-                url.startswith("https://storage.googleapis.com/tiktok-actor-content/")]
-
-    tiktok_videos = [url for url in valid_urls if isinstance(url, str) and 
-                    'tiktok.com' in url.lower() and url.split("/")[-1].isdigit()]
-
-    # Debug information
-    st.write(f"Found {len(youtube_shorts)} YouTube Shorts")
-    st.write(f"Found {len(gcs_urls)} GCS URLs")
-    st.write(f"Found {len(tiktok_videos)} TikTok videos")
+    # YouTube Shorts: Last part of the URL contains both numbers and letters
+    youtube_shorts = [url for url in valid_urls if isinstance(url, str) and any(c.isalpha() for c in url.split("/")[-1]) and any(c.isdigit() for c in url.split("/")[-1])]
 
     # Button to start downloading and processing videos
     if st.button("Download and Process Videos"):
@@ -346,19 +410,40 @@ if input_excel:
         st.cache_data.clear()
         st.cache_resource.clear()
         
-        # Only process YouTube shorts if there are any
-        if youtube_shorts:
-            try:
-                with st.spinner("Downloading YouTube Shorts..."):
-                    yt_shorts_downloader(
-                        urls=youtube_shorts,
-                        bucket_name="tiktok-actor-content"
-                    )
-                    gc.collect()
-            except Exception as e:
-                print(f"An error occurred while downloading YouTube Shorts: {e}")
-        
-        # Process each row and update GCS/GIF URLs
+        try:
+            with st.spinner("Downloading YouTube Shorts..."):
+                yt_shorts_downloader(
+                    urls=youtube_shorts,
+                    bucket_name="tiktok-actor-content"
+                )
+                gc.collect()
+        except Exception as e:
+            print(f"An error occurred while downloading YouTube Shorts: {e}")
+
+        # Input parameters for Apify run
+        input_params = {
+            "disableCheerioBoost": False,
+            "disableEnrichAuthorStats": False,
+            "resultsPerPage": 1,
+            "searchSection": "/video",
+            "shouldDownloadCovers": True,
+            "shouldDownloadSlideshowImages": False,
+            "shouldDownloadVideos": True,
+            "maxProfilesPerQuery": 10,
+            "tiktokMemoryMb": "default",
+            "postURLs": tiktok_videos
+        }
+        # start task run
+        response = run_actor_task(input_params)
+        # # API token
+        API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
+
+        # Get the run ID from the response
+        data = response.json()
+        run_id = data['data']['id']
+        st.write(f"Run ID: {run_id}")  # Display the run ID in Streamlit
+
+        # Process each row and update GCS/GIF URLs only for valid links
         for index, row in processed_df.iterrows():
             # Preserve the existing data column and other columns
             if pd.isna(row["Links"]) or not isinstance(row["Links"], str):
@@ -370,16 +455,8 @@ if input_excel:
             else:
                 # Process valid links
                 clean_url = row["Links"]
-                # If it's a GCS URL, use it directly
-                if clean_url.startswith("https://storage.googleapis.com/tiktok-actor-content/"):
-                    processed_df.at[index, "Gcs Url"] = clean_url
-                else:
-                    # For YouTube URLs, create new GCS URL
-                    video_id = clean_url.split("?")[0].split("/")[-1]
-                    processed_df.at[index, "Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
-                
-                # Set Gif URL for all types
-                video_id = processed_df.at[index, "Gcs Url"].split("/")[-1].replace(".mp4", "")
+                video_id = clean_url.split("?")[0].split("/")[-1]
+                processed_df.at[index, "Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
                 processed_df.at[index, "Gif Url"] = f"https://storage.googleapis.com/tiktok-actor-content/gifs_20240419/{video_id}.gif"
 
         # Save the updated data to Excel file
@@ -387,22 +464,25 @@ if input_excel:
         processed_df.to_excel(output_file_name, index=False)
         st.success(f"Updated Excel file saved as {output_file_name}")
 
-        # Process videos to create GIFs
-        with st.spinner("Converting videos to GIFs..."):
-            final_df = process_videos_from_excel(output_file_name, 'Sheet1')
-            final_df.to_excel(output_file_name, index=False)
-        
-        # Clear caches before file download
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        
-        # Offer download of final results
-        st.download_button(
-            label="Download Updated Gif Urls Sheet",
-            data=open(output_file_name, "rb").read(),
-            file_name=output_file_name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        if check_apify_run_status(run_id, API_TOKEN):
+            with st.spinner("Processing videos..."):
+                # Process videos and get the updated dataframe
+                final_df = process_videos_from_excel(output_file_name, 'Sheet1')
+                # Save the final results
+                final_df.to_excel(output_file_name, index=False)
+            
+            # Clear caches before file download
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            
+            st.download_button(
+                label="Download Updated Gif Urls Sheet",
+                data=open(output_file_name, "rb").read(),
+                file_name=output_file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.error("The Apify run failed or could not be completed.")
 
 # Clean up temporary files and resources
 gc.collect()
