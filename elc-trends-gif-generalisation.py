@@ -459,14 +459,18 @@ if input_excel:
         st.write(f"Run ID: {run_id}")  # Display the run ID in Streamlit
 
         # Process each row and update GCS/GIF URLs
+        # First, ensure the required columns exist
+        if "Gcs Url" not in processed_df.columns:
+            processed_df["Gcs Url"] = None
+        if "Gif Url" not in processed_df.columns:
+            processed_df["Gif Url"] = None
+
         for index, row in processed_df.iterrows():
             # Preserve the existing data column and other columns
             if pd.isna(row["Links"]) or not isinstance(row["Links"], str):
-                # Keep existing data and URLs if they exist
-                if "Gcs Url" not in processed_df.columns:
-                    processed_df.at[index, "Gcs Url"] = None
-                if "Gif Url" not in processed_df.columns:
-                    processed_df.at[index, "Gif Url"] = None
+                # Set both URLs to None for invalid links
+                processed_df.at[index, "Gcs Url"] = None
+                processed_df.at[index, "Gif Url"] = None
             else:
                 # Process valid links
                 clean_url = row["Links"]
