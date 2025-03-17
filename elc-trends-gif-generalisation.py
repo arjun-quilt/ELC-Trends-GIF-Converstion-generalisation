@@ -410,38 +410,24 @@ if input_excel:
         st.cache_data.clear()
         st.cache_resource.clear()
         
-        try:
-            with st.spinner("Downloading YouTube Shorts..."):
-                yt_shorts_downloader(
-                    urls=youtube_shorts,
-                    bucket_name="tiktok-actor-content"
-                )
-                gc.collect()
-        except Exception as e:
-            print(f"An error occurred while downloading YouTube Shorts: {e}")
-
-        # Input parameters for Apify run
-        input_params = {
-            "disableCheerioBoost": False,
-            "disableEnrichAuthorStats": False,
-            "resultsPerPage": 1,
-            "searchSection": "/video",
-            "shouldDownloadCovers": True,
-            "shouldDownloadSlideshowImages": False,
-            "shouldDownloadVideos": True,
-            "maxProfilesPerQuery": 10,
-            "tiktokMemoryMb": "default",
-            "postURLs": tiktok_videos
-        }
-        # start task run
-        response = run_actor_task(input_params)
-        # # API token
-        API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
-
-        # Get the run ID from the response
-        data = response.json()
-        run_id = data['data']['id']
-        st.write(f"Run ID: {run_id}")  # Display the run ID in Streamlit
+        # Only process YouTube shorts if there are any
+        if youtube_shorts:
+            try:
+                with st.spinner("Downloading YouTube Shorts..."):
+                    yt_shorts_downloader(
+                        urls=youtube_shorts,
+                        bucket_name="tiktok-actor-content"
+                    )
+                    gc.collect()
+            except Exception as e:
+                print(f"An error occurred while downloading YouTube Shorts: {e}")
+        
+        # Process TikTok videos using async
+        if tiktok_videos:
+            success = asyncio.run(process_tiktok_videos(tiktok_videos))
+            if not success:
+                st.error("TikTok video processing failed")
+                
 
         # Process each row and update GCS/GIF URLs only for valid links
         for index, row in processed_df.iterrows():
