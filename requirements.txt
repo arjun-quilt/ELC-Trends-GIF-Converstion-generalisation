@@ -9,3 +9,4 @@ ffmpeg-python
 imageio
 imageio-ffmpeg
 aiohttp
+asyncio
