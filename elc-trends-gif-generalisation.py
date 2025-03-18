@@ -275,12 +275,11 @@ def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd
 
 #call this function at last
 def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
-    # Clear caches before starting the process
+    # Clear cache only once at the start of the main process
     st.cache_data.clear()
     st.cache_resource.clear()
     
     df = pd.read_excel(input_excel, sheet_name=sheet_name)
-    # Instead of dropping rows, count valid URLs
     valid_urls = df[~df['Gcs Url'].isna()]['Gcs Url'].tolist()
     
     progress_bar = st.progress(0)
@@ -304,10 +303,11 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
             
         print(f"Processing video URL: {video_url}")
 
-        # Clear caches periodically (e.g., every 5 videos)
+        # Clear caches only periodically (every 5 videos) instead of every iteration
         if processed_count > 0 and processed_count % 5 == 0:
             st.cache_data.clear()
             st.cache_resource.clear()
+            gc.collect()
 
         video_path = download_and_trim_video(video_url)
 
@@ -347,6 +347,7 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
     st.cache_data.clear()
     st.cache_resource.clear()
     
+    # Show final completion status
     progress_bar.progress(1.0)
     counter_placeholder.text(f"Completed processing all {processed_count}/{total_videos} videos!")
 
@@ -384,11 +385,10 @@ st.write("Column_Name: Links")
 st.write("Tab_Name: Master_Sheet")
 
 if input_excel:
-    # Clear caches before reading file
+    # Clear cache once when reading the file
     st.cache_data.clear()
     st.cache_resource.clear()
     
-    # Read the file based on its extension
     if input_excel.name.endswith('.xlsx'):
         df = pd.read_excel(input_excel, sheet_name='Master_Sheet')
     elif input_excel.name.endswith('.csv'):
@@ -420,7 +420,7 @@ if input_excel:
 
     # Button to start downloading and processing videos
     if st.button("Download and Process Videos"):
-        # Clear caches before starting the process
+        # Clear once before starting the main process
         st.cache_data.clear()
         st.cache_resource.clear()
         
@@ -512,8 +512,4 @@ if input_excel:
             )
         else:
             st.error("The Apify run failed or could not be completed.")
-
-# Clear caches and collect garbage at the end
-st.cache_data.clear()
-st.cache_resource.clear()
 gc.collect()
