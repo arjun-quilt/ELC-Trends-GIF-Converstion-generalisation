@@ -18,9 +18,17 @@ import gc
 import aiohttp
 import asyncio
 from typing import List
+import psutil
 
 # Initialize memory tracking
 tracemalloc.start()
+
+# Add this at the start of your code, after imports
+memory_placeholder = st.empty()  # Global placeholder for memory usage
+
+# Add this near the top of the file, after imports
+if 'processing_complete' not in st.session_state:
+    st.session_state.processing_complete = False
 
 ############## Helper functions starts #############
 
@@ -66,7 +74,7 @@ async def check_run_status(run_id: str, api_token: str, status_placeholder) -> b
                 status_placeholder.warning(f"Run {run_id}: Request failed - {str(e)}")
                 await asyncio.sleep(retry_delay)
 
-async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
+async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 20):
     """Process all TikTok videos in parallel batches"""
     if not tiktok_videos:
         return True
@@ -121,7 +129,72 @@ async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
             st.error(f"Error processing TikTok videos: {str(e)}")
             return False
 
-def yt_shorts_downloader(urls, bucket_name):
+async def upload_to_gcs_async(bucket, video_data, destination_blob):
+    """Async version of upload_to_gcs"""
+    loop = asyncio.get_event_loop()
+    blob = bucket.blob(destination_blob)
+    await loop.run_in_executor(None, lambda: blob.upload_from_file(video_data, content_type="video/mp4"))
+    print(f"Video uploaded to {destination_blob} in bucket {bucket.name}.")
+
+async def check_apify_run_status_async(run_id, api_token):
+    """Async version of check_apify_run_status"""
+    url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={api_token}"
+    
+    # Streamlit component to display status
+    status_message = st.empty()  # Create an empty placeholder for status updates
+    max_retries = 3
+    retry_delay = 5
+    timeout = 30  # seconds
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            for retry in range(max_retries):
+                try:
+                    async with session.get(url, timeout=timeout) as response:
+                        if response.status == 200:
+                            run_data = await response.json()
+                            status = run_data.get('data', {}).get('status')
+
+                            if status == 'SUCCEEDED':
+                                status_message.success("SUCCEEDED")
+                                return True
+                            elif status == 'FAILED':
+                                status_message.error("FAILED")
+                                return False
+                            elif status == 'RUNNING':
+                                status_message.info("Run is still in progress...")
+                                break  # Break retry loop on successful check
+                            else:
+                                status_message.warning(f"Unknown status: {status}")
+                                break  # Break retry loop on successful check
+                        else:
+                            if retry < max_retries - 1:
+                                status_message.warning(f"Request failed (attempt {retry + 1}/{max_retries}). Retrying...")
+                                await asyncio.sleep(retry_delay)
+                            else:
+                                status_message.error(f"Error fetching run status: {response.status}, {await response.text()}")
+                                return False
+
+                except asyncio.TimeoutError:
+                    if retry < max_retries - 1:
+                        status_message.warning(f"Request timed out (attempt {retry + 1}/{max_retries}). Retrying...")
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        status_message.error("Failed to check status due to timeout after multiple retries")
+                        return False
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        status_message.warning(f"Request failed (attempt {retry + 1}/{max_retries}): {str(e)}. Retrying...")
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        status_message.error(f"Failed to check status after multiple retries: {str(e)}")
+                        return False
+
+            # Wait before next status check
+            await asyncio.sleep(5)
+
+async def yt_shorts_downloader_async(urls, bucket_name):
+    """Async version of yt_shorts_downloader"""
     # Ensure URLs is a list
     if not isinstance(urls, list):
         raise ValueError("The URLs parameter should be a list of strings.")
@@ -137,170 +210,94 @@ def yt_shorts_downloader(urls, bucket_name):
     max_retries = 3
     retry_delay = 5  # seconds
 
-    # Iterate through the list of URLs
-    for idx, url in enumerate(urls):
-        # Update progress
-        progress = (idx + 1) / total_shorts
-        progress_bar.progress(progress)
-        status_text.text(f"Processing YouTube Short {idx + 1}/{total_shorts}")
+    # Create a semaphore to limit concurrent downloads
+    semaphore = asyncio.Semaphore(3)  # Limit to 3 concurrent downloads
 
-        # Set options for yt-dlp
-        ydl_opts = {
-            'format': 'mp4',  # Specify MP4 format
-            'outtmpl': '-',   # Output to stdout (streaming)
-            'quiet': True,    # Suppress yt-dlp's output
-            'socket_timeout': 30,  # Increase socket timeout
-        }
+    async def download_single_short(url, idx):
+        async with semaphore:
+            # Update progress
+            progress = (idx + 1) / total_shorts
+            progress_bar.progress(progress)
+            status_text.text(f"Processing YouTube Short {idx + 1}/{total_shorts}")
 
-        for retry in range(max_retries):
-            try:
-                # Download video and upload to GCS
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    result = ydl.extract_info(url, download=False)
-                    video_id = result['id']
+            # Set options for yt-dlp
+            ydl_opts = {
+                'format': 'mp4',  # Specify MP4 format
+                'outtmpl': '-',   # Output to stdout (streaming)
+                'quiet': True,    # Suppress yt-dlp's output
+                'socket_timeout': 30,  # Increase socket timeout
+            }
 
-                    # Get the actual video content
-                    video_content = ydl.urlopen(result['url']).read()
-                    video_data = io.BytesIO(video_content)
+            for retry in range(max_retries):
+                try:
+                    # Download video and upload to GCS
+                    loop = asyncio.get_event_loop()
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        result = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
+                        video_id = result['id']
 
-                    # Define the destination file name in the bucket
-                    destination_blob = f"{video_id}.mp4"
+                        # Get the actual video content
+                        video_content = await loop.run_in_executor(None, lambda: ydl.urlopen(result['url']).read())
+                        video_data = io.BytesIO(video_content)
 
-                    # Create a blob in the bucket and upload the video
-                    blob = bucket.blob(destination_blob)
-                    blob.upload_from_file(video_data, content_type="video/mp4")
+                        # Define the destination file name in the bucket
+                        destination_blob = f"{video_id}.mp4"
 
-                    print(f"Uploaded {destination_blob} to bucket {bucket_name}.")
-                    break  # Success, break the retry loop
-            except Exception as e:
-                if retry < max_retries - 1:
-                    st.warning(f"Attempt {retry + 1} failed for {url}. Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                else:
-                    st.error(f"Failed to process YouTube Short {url} after {max_retries} attempts: {str(e)}")
-                continue
+                        # Create a blob in the bucket and upload the video
+                        await upload_to_gcs_async(bucket, video_data, destination_blob)
+                        print(f"Uploaded {destination_blob} to bucket {bucket_name}.")
+                        break  # Success, break the retry loop
+                except Exception as e:
+                    if retry < max_retries - 1:
+                        st.warning(f"Attempt {retry + 1} failed for {url}. Retrying in {retry_delay} seconds...")
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        st.error(f"Failed to process YouTube Short {url} after {max_retries} attempts: {str(e)}")
+                    continue
+
+    # Create tasks for all downloads
+    tasks = [download_single_short(url, idx) for idx, url in enumerate(urls)]
+    
+    # Wait for all downloads to complete
+    await asyncio.gather(*tasks)
 
     # Complete the progress bar
     progress_bar.progress(1.0)
     status_text.text("Completed processing all YouTube Shorts!")
 
-# Helper function to upload to GCS (if needed externally)
-def upload_to_gcs(bucket, video_data, destination_blob):
-    blob = bucket.blob(destination_blob)
-    blob.upload_from_file(video_data, content_type="video/mp4")
-    print(f"Video uploaded to {destination_blob} in bucket {bucket.name}.")
+def log_memory_usage():
+    """Monitor memory usage with updating display"""
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    memory_placeholder.text(f"Memory usage: {memory_info.rss / 1024 / 1024:.2f} MB")
 
-
-def check_apify_run_status(run_id, api_token):
-    url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={api_token}"
-    
-    # Streamlit component to display status
-    status_message = st.empty()  # Create an empty placeholder for status updates
-    max_retries = 3
-    retry_delay = 5
-    timeout = 30  # seconds
-
-    while True:
-        for retry in range(max_retries):
-            try:
-                response = requests.get(url, timeout=timeout)
-                
-                if response.status_code == 200:
-                    run_data = response.json()
-                    status = run_data.get('data', {}).get('status')
-
-                    if status == 'SUCCEEDED':
-                        status_message.success("SUCCEEDED")
-                        return True
-                    elif status == 'FAILED':
-                        status_message.error("FAILED")
-                        return False
-                    elif status == 'RUNNING':
-                        status_message.info("Run is still in progress...")
-                        break  # Break retry loop on successful check
-                    else:
-                        status_message.warning(f"Unknown status: {status}")
-                        break  # Break retry loop on successful check
-                else:
-                    if retry < max_retries - 1:
-                        status_message.warning(f"Request failed (attempt {retry + 1}/{max_retries}). Retrying...")
-                        time.sleep(retry_delay)
-                    else:
-                        status_message.error(f"Error fetching run status: {response.status_code}, {response.text}")
-                        return False
-
-            except requests.exceptions.Timeout:
-                if retry < max_retries - 1:
-                    status_message.warning(f"Request timed out (attempt {retry + 1}/{max_retries}). Retrying...")
-                    time.sleep(retry_delay)
-                else:
-                    status_message.error("Failed to check status due to timeout after multiple retries")
-                    return False
-            except requests.exceptions.RequestException as e:
-                if retry < max_retries - 1:
-                    status_message.warning(f"Request failed (attempt {retry + 1}/{max_retries}): {str(e)}. Retrying...")
-                    time.sleep(retry_delay)
-                else:
-                    status_message.error(f"Failed to check status after multiple retries: {str(e)}")
-                    return False
-
-        # Wait before next status check
-        time.sleep(5)
-
-# Function to convert media files to GIFs
-def convert_to_gif(media_file, max_duration=10, fps=10, output_dir=os.path.join(os.getcwd(), 'gifs')):
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    try:
-        with VideoFileClip(media_file) as clip:
-            # If the video is longer than `max_duration`, use only the first `max_duration` seconds
-            if clip.duration > max_duration:
-                clip = clip.subclip(0, max_duration)
-
-            clip = clip.set_fps(fps)
-
-            output_gif_path = os.path.join(output_dir, os.path.splitext(os.path.basename(media_file))[0] + '.gif')
-            clip.write_gif(output_gif_path)
-            print(f"Converted {media_file} to {output_gif_path}")
-            return output_gif_path  # Return the GIF path
-    except Exception as e:
-        print(f"Failed to convert {media_file}: {e}")
-        return None
-def upload_gif_to_gcs(bucket_name, gif_path):
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    destination_blob = f"gifs_20240419/{os.path.basename(gif_path)}"  # Destination path in GCS
-
-    blob = bucket.blob(destination_blob)
-    blob.upload_from_filename(gif_path, content_type="image/gif")
-    print(f"Uploaded {gif_path} to bucket {bucket_name} at {destination_blob}.")
-
-# Function to download video from GCS URL
-def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'), duration=10):
+async def download_and_trim_video_async(url, output_dir=os.path.join(os.getcwd(), 'videos'), duration=10):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     video_filename = os.path.basename(url)
     output_path = os.path.join(output_dir, video_filename)
-
-    ydl_opts = {
-        'format': 'mp4',
-        'outtmpl': output_path,
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-    except Exception as e:
-        print(f"Failed to download video: {e}")
-        #st.error(f"Failed to download video from URL: {url} - Error: {e}")  # Display the video URL and error message in Streamlit        return None
-
     trimmed_output = os.path.join(output_dir, f"trimmed_{video_filename}")
 
     try:
+        ydl_opts = {
+            'format': 'mp4',
+            'outtmpl': output_path,
+        }
+
+        # Run yt-dlp download in thread pool
+        loop = asyncio.get_event_loop()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            await loop.run_in_executor(None, lambda: ydl.download([url]))
+
+        # Add explicit cleanup for video processing
+        if os.path.exists(output_path):
+            clip = await loop.run_in_executor(None, lambda: VideoFileClip(output_path))
+            await loop.run_in_executor(None, lambda: clip.close())
+            del clip
+            gc.collect()
+
         ffmpeg_path = iio_ffmpeg.get_ffmpeg_exe()
-        print(f"FFmpeg path: {ffmpeg_path}")
         command = [
             ffmpeg_path,
             '-i', output_path,
@@ -309,142 +306,315 @@ def download_and_trim_video(url, output_dir=os.path.join(os.getcwd(), 'videos'),
             '-y',
             trimmed_output
         ]
-        result = subprocess.run(command, capture_output=True, text=True, env=os.environ)
+        
+        # Run ffmpeg command in thread pool
+        result = await loop.run_in_executor(None, lambda: subprocess.run(command, capture_output=True, text=True, env=os.environ))
 
         if result.returncode != 0:
             print(f"FFmpeg command failed with error: {result.stderr}")
             return None
 
-        os.remove(output_path)
-        os.rename(trimmed_output, output_path)
+        # Clean up files
+        await loop.run_in_executor(None, lambda: os.remove(output_path))
+        await loop.run_in_executor(None, lambda: os.rename(trimmed_output, output_path))
         return output_path
 
     except Exception as e:
-        print(f"Failed to trim the video: {e}")
+        print(f"Failed to download/trim video: {e}")
+        if 'clip' in locals():
+            await loop.run_in_executor(None, lambda: clip.close())
+            del clip
+        gc.collect()
         return None
+    finally:
+        if os.path.exists(trimmed_output):
+            await loop.run_in_executor(None, lambda: os.remove(trimmed_output))
 
+async def upload_gif_to_gcs_async(bucket_name, gif_path):
+    loop = asyncio.get_event_loop()
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    destination_blob = f"gifs_20240419/{os.path.basename(gif_path)}"
 
+    # Upload file in thread pool
+    blob = bucket.blob(destination_blob)
+    await loop.run_in_executor(None, lambda: blob.upload_from_filename(gif_path, content_type="image/gif"))
+    print(f"Uploaded {gif_path} to bucket {bucket_name} at {destination_blob}.")
 
-def resize_gif(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd(), 'processed_gifs')):
+async def convert_to_gif_async(media_file, max_duration=10, fps=10, output_dir=os.path.join(os.getcwd(), 'gifs')):
+    """Async version of convert_to_gif"""
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    clip = None
+    try:
+        # Run video processing in a thread pool to not block the event loop
+        loop = asyncio.get_event_loop()
+        clip = await loop.run_in_executor(None, lambda: VideoFileClip(media_file))
+        
+        if clip.duration > max_duration:
+            clip = await loop.run_in_executor(None, lambda: clip.subclip(0, max_duration))
+
+        clip = await loop.run_in_executor(None, lambda: clip.set_fps(fps))
+        output_gif_path = os.path.join(output_dir, os.path.splitext(os.path.basename(media_file))[0] + '.gif')
+        
+        # Run GIF writing in thread pool
+        await loop.run_in_executor(None, lambda: clip.write_gif(output_gif_path))
+        print(f"Converted {media_file} to {output_gif_path}")
+        return output_gif_path
+    except Exception as e:
+        print(f"Failed to convert {media_file}: {e}")
+        return None
+    finally:
+        if clip:
+            await loop.run_in_executor(None, lambda: clip.close())
+            del clip
+        gc.collect()
+
+async def resize_gif_async(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd(), 'processed_gifs')):
+    """Async version of resize_gif"""
     if not os.path.exists(processed_dir):
         os.makedirs(processed_dir)
 
-    clip = VideoFileClip(input_gif)
+    loop = asyncio.get_event_loop()
+    clip = None
     try:
-        fps = clip.fps  # Frames per second
+        # Load video in thread pool
+        clip = await loop.run_in_executor(None, lambda: VideoFileClip(input_gif))
+        fps = clip.fps
         current_size = os.path.getsize(input_gif)
 
         if current_size > max_size_mb * 1024 * 1024:
-            reduction_factor = 0.95  # Initial reduction by 5%
+            reduction_factor = 0.95
             while current_size > max_size_mb * 1024 * 1024:
                 new_duration = clip.duration * reduction_factor
-                clip = clip.subclip(0, new_duration)
-                clip.write_gif("temp_resized.gif", fps=fps)
+                clip = await loop.run_in_executor(None, lambda: clip.subclip(0, new_duration))
+                await loop.run_in_executor(None, lambda: clip.write_gif("temp_resized.gif", fps=fps))
                 current_size = os.path.getsize("temp_resized.gif")
-                os.remove("temp_resized.gif")  # Clearing the temporary file
-                reduction_factor *= 0.95  # Reduce the duration further
+                os.remove("temp_resized.gif")
+                reduction_factor *= 0.95
 
-            # Save the resized GIF in the processed directory
             base, ext = os.path.splitext(os.path.basename(input_gif))
             output_gif = os.path.join(processed_dir, f"{base}{ext}")
-            clip.write_gif(output_gif, fps=fps)
+            await loop.run_in_executor(None, lambda: clip.write_gif(output_gif, fps=fps))
             print(f"Resized GIF saved as {output_gif}, size: {current_size/1024/1024:.2f} MB")
-            return output_gif if current_size <= max_size_mb * 1024 * 1024 else None  # Return None if still too large
+            return output_gif if current_size <= max_size_mb * 1024 * 1024 else None
         else:
-            # If not resizing, just copy the original GIF to the processed directory
             shutil.copy(input_gif, processed_dir)
-            return input_gif  # Return the original GIF path
+            return input_gif
     finally:
-        clip.close()  # Close the VideoFileClip object
-        del clip  # Delete the VideoFileClip object
-        gc.collect()  # Collect garbage to free up memory
-
-
-
-#call this function at last
-def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
-    # Clear caches before starting the process
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    
-    df = pd.read_excel(input_excel, sheet_name=sheet_name)
-    # Instead of dropping rows, count valid URLs
-    valid_urls = df[~df['Gcs Url'].isna()]['Gcs Url'].tolist()
-    
-    progress_bar = st.progress(0)
-    total_videos = len(valid_urls)
-    processed_count = 0
-    
-    if total_videos == 0:
-        st.warning("No valid videos to process.")
-        return df  # Return the original dataframe without modifications
-    
-    counter_placeholder = st.empty()
-    counter_placeholder.text(f"Processed 0/{total_videos} videos")
-
-    for index, row in df.iterrows():
-        video_url = row["Gcs Url"]
-        
-        # Skip if video_url is None or NaN but keep the row
-        if pd.isna(video_url) or not isinstance(video_url, str):
-            print(f"Skipping invalid URL at index {index}")
-            continue
-            
-        print(f"Processing video URL: {video_url}")
-
-        # Clear caches periodically (e.g., every 5 videos)
-        if processed_count > 0 and processed_count % 5 == 0:
-            st.cache_data.clear()
-            st.cache_resource.clear()
-
-        video_path = download_and_trim_video(video_url)
-
-        if video_path:
-            gif_path = convert_to_gif(video_path, output_dir=output_dir)
-
-            if gif_path:
-                resized_gif_path = resize_gif(gif_path)
-
-                if resized_gif_path and os.path.exists(resized_gif_path):
-                    upload_gif_to_gcs('tiktok-actor-content', resized_gif_path)
-                    os.remove(resized_gif_path)
-                    print(f"Deleted GIF: {resized_gif_path}")
-                    # Only increment counter after successful processing
-                    processed_count += 1
-                else:
-                    print(f"Resized GIF is still too large or failed to resize: {gif_path}")
-
-            if os.path.exists(video_path):
-                os.remove(video_path)
-                print(f"Deleted video: {video_path}")
-
-        # Check the GCS URL status
-        response = requests.head(video_url)
-        if response.status_code != 200:
-            print(f"Removing GCS URL and GIF URL for video URL: {video_url}")
-            df.at[index, "Gcs Url"] = None
-            df.at[index, "Gif Url"] = None
-
-        # Update progress, counter, and collect garbage after each video
-        progress = min(processed_count / total_videos, 1.0)  # Ensure progress never exceeds 1.0
-        progress_bar.progress(progress)
-        counter_placeholder.text(f"Processed {processed_count}/{total_videos} videos")
+        if clip:
+            await loop.run_in_executor(None, lambda: clip.close())
+            del clip
         gc.collect()
 
-    # Clear caches after completing all processing
-    st.cache_data.clear()
-    st.cache_resource.clear()
-    
-    progress_bar.progress(1.0)
-    counter_placeholder.text(f"Completed processing all {processed_count}/{total_videos} videos!")
+async def process_video_async(video_url, output_dir):
+    """Process a single video asynchronously"""
+    try:
+        video_path = await download_and_trim_video_async(video_url)
+        if video_path:
+            try:
+                gif_path = await convert_to_gif_async(video_path, output_dir=output_dir)
+                if gif_path:
+                    try:
+                        resized_gif_path = await resize_gif_async(gif_path)
+                        if resized_gif_path and os.path.exists(resized_gif_path):
+                            await upload_gif_to_gcs_async('tiktok-actor-content', resized_gif_path)
+                            await asyncio.get_event_loop().run_in_executor(None, lambda: os.remove(resized_gif_path))
+                            return True
+                    finally:
+                        if os.path.exists(gif_path):
+                            await asyncio.get_event_loop().run_in_executor(None, lambda: os.remove(gif_path))
+            finally:
+                if os.path.exists(video_path):
+                    await asyncio.get_event_loop().run_in_executor(None, lambda: os.remove(video_path))
+        return False
+    except Exception as e:
+        print(f"Error processing video {video_url}: {str(e)}")
+        return False
 
-    output_file_name = 'updated_tiktok_urls.xlsx'
-    df.to_excel(output_file_name, index=False)
-    st.success(f"All videos processed successfully! Processed {processed_count} out of {total_videos} videos.")
-    gc.collect()
-    return df  # Return the updated dataframe
+async def process_videos_batch_async(videos, output_dir, batch_size=5):
+    """Process videos in parallel batches"""
+    results = []
+    for i in range(0, len(videos), batch_size):
+        batch = videos[i:i + batch_size]
+        tasks = [process_video_async(video_url, output_dir) for video_url in batch]
+        batch_results = await asyncio.gather(*tasks)
+        results.extend(batch_results)
+    return results
 
+async def process_videos_from_excel_async(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
+    try:
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        gc.collect()
+        
+        log_memory_usage()
+        
+        df = pd.read_excel(input_excel, sheet_name=sheet_name)
+        valid_urls = df[~df['Gcs Url'].isna()]['Gcs Url'].tolist()
+        
+        progress_bar = st.progress(0)
+        total_videos = len(valid_urls)
+        processed_count = 0
+        
+        if total_videos == 0:
+            st.warning("No valid videos to process.")
+            return df
 
+        counter_placeholder = st.empty()
+        counter_placeholder.text(f"Processed 0/{total_videos} videos")
+
+        # Process videos in batches
+        results = await process_videos_batch_async(valid_urls, output_dir, batch_size=5)
+        processed_count = sum(1 for r in results if r)
+
+        progress_bar.progress(1.0)
+        counter_placeholder.text(f"Completed processing all {processed_count}/{total_videos} videos!")
+
+        output_file_name = 'updated_tiktok_urls.xlsx'
+        df.to_excel(output_file_name, index=False)
+        st.success(f"All videos processed successfully! Processed {processed_count} out of {total_videos} videos.")
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"An error occurred: {str(e)}")
+        return df
+    finally:
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        gc.collect()
+        log_memory_usage()
+
+# Add this new async function for checking URLs
+async def check_gcs_url_status(url, session):
+    """Async function to check GCS URL status"""
+    try:
+        async with session.head(url, timeout=10) as response:
+            return url, response.status == 200
+    except Exception:
+        return url, False
+
+# Modify the process_videos_from_excel function to include async URL checking
+async def check_all_gcs_urls(urls_to_check):
+    """Check multiple GCS URLs in parallel"""
+    async with aiohttp.ClientSession() as session:
+        tasks = [check_gcs_url_status(url, session) for url in urls_to_check]
+        results = await asyncio.gather(*tasks)
+        return dict(results)
+
+def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
+    try:
+        # Clear caches and collect garbage at start
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        gc.collect()
+        
+        log_memory_usage()  # Initial memory check
+        
+        df = pd.read_excel(input_excel, sheet_name=sheet_name)
+        valid_urls = df[~df['Gcs Url'].isna()]['Gcs Url'].tolist()
+        
+        progress_bar = st.progress(0)
+        total_videos = len(valid_urls)
+        processed_count = 0
+        
+        if total_videos == 0:
+            st.warning("No valid videos to process.")
+            return df
+
+        counter_placeholder = st.empty()
+        counter_placeholder.text(f"Processed 0/{total_videos} videos")
+
+        # First, collect all GCS URLs to check
+        urls_to_check = []
+        url_to_index = {}  # Map URLs to their dataframe indices
+        
+        for index, row in df.iterrows():
+            video_url = row["Gcs Url"]
+            if not pd.isna(video_url) and isinstance(video_url, str):
+                urls_to_check.append(video_url)
+                url_to_index[video_url] = index
+
+        # Check all URLs in parallel
+        with st.spinner("Checking GCS URLs status..."):
+            url_status = asyncio.run(check_all_gcs_urls(urls_to_check))
+
+        # Update DataFrame based on URL status
+        for url, is_valid in url_status.items():
+            if not is_valid:
+                index = url_to_index[url]
+                df.at[index, "Gcs Url"] = None
+                df.at[index, "Gif Url"] = None
+                print(f"Removing invalid GCS URL: {url}")
+
+        # Continue with video processing
+        for index, row in df.iterrows():
+            try:
+                # Clear memory every 5 videos and update memory usage
+                if processed_count > 0 and processed_count % 5 == 0:
+                    st.cache_data.clear()
+                    st.cache_resource.clear()
+                    gc.collect()
+                    log_memory_usage()  # This will now update the same line
+
+                video_url = row["Gcs Url"]
+                if pd.isna(video_url) or not isinstance(video_url, str):
+                    print(f"Skipping invalid URL at index {index}")
+                    continue
+
+                print(f"Processing video URL: {video_url}")
+                
+                # Process video with proper cleanup
+                video_path = asyncio.run(download_and_trim_video_async(video_url))
+                if video_path:
+                    try:
+                        gif_path = asyncio.run(convert_to_gif_async(video_path, output_dir=output_dir))
+                        if gif_path:
+                            try:
+                                resized_gif_path = asyncio.run(resize_gif_async(gif_path))
+                                if resized_gif_path and os.path.exists(resized_gif_path):
+                                    asyncio.run(upload_gif_to_gcs_async('tiktok-actor-content', resized_gif_path))
+                                    os.remove(resized_gif_path)
+                                    processed_count += 1
+                            finally:
+                                if os.path.exists(gif_path):
+                                    os.remove(gif_path)
+                    finally:
+                        if os.path.exists(video_path):
+                            os.remove(video_path)
+
+                # Update progress
+                progress = min(processed_count / total_videos, 1.0)
+                progress_bar.progress(progress)
+                counter_placeholder.text(f"Processed {processed_count}/{total_videos} videos")
+                
+            except Exception as e:
+                print(f"Error processing row {index}: {str(e)}")
+                continue
+            
+            # Update memory usage after each video
+            log_memory_usage()
+
+        progress_bar.progress(1.0)
+        counter_placeholder.text(f"Completed processing all {processed_count}/{total_videos} videos!")
+
+        output_file_name = 'updated_tiktok_urls.xlsx'
+        df.to_excel(output_file_name, index=False)
+        st.success(f"All videos processed successfully! Processed {processed_count} out of {total_videos} videos.")
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"An error occurred: {str(e)}")
+        return df
+    finally:
+        # Final cleanup
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        gc.collect()
+        log_memory_usage()  # Final memory check
 
 ############### Helper functions ends ##############
 
@@ -504,6 +674,9 @@ if input_excel:
 
     # Button to start downloading and processing videos
     if st.button("Download and Process Videos"):
+        # Reset processing state
+        st.session_state.processing_complete = False
+        
         # Clear caches before starting the download process
         st.cache_data.clear()
         st.cache_resource.clear()
@@ -512,10 +685,10 @@ if input_excel:
         if youtube_shorts:
             try:
                 with st.spinner("Downloading YouTube Shorts..."):
-                    yt_shorts_downloader(
+                    asyncio.run(yt_shorts_downloader_async(
                         urls=youtube_shorts,
                         bucket_name="tiktok-actor-content"
-                    )
+                    ))
                     gc.collect()
             except Exception as e:
                 print(f"An error occurred while downloading YouTube Shorts: {e}")
@@ -525,7 +698,6 @@ if input_excel:
             success = asyncio.run(process_tiktok_videos(tiktok_videos))
             if not success:
                 st.error("TikTok video processing failed")
-                
 
         # Process each row and update GCS/GIF URLs
         for index, row in processed_df.iterrows():
@@ -572,6 +744,18 @@ if input_excel:
             file_name=output_file_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+        
+        # Mark processing as complete
+        st.session_state.processing_complete = True
+        
+        # Show completion message and stop the session
+        st.success("All processing completed successfully! You can now close this window.")
+        st.stop()
+
+# Add a check for completed processing
+if st.session_state.processing_complete:
+    st.info("Processing has been completed. You can close this window or refresh to start a new session.")
+    st.stop()
 
 # Clean up temporary files and resources
 gc.collect()
