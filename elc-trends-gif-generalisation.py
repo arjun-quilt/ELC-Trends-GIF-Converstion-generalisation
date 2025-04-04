@@ -271,13 +271,12 @@ def log_memory_usage():
     memory_info = process.memory_info()
     memory_placeholder.text(f"Memory usage: {memory_info.rss / 1024 / 1024:.2f} MB")
 
-async def download_and_trim_video_async(url, output_dir=os.path.join(os.getcwd(), 'videos'), duration=10):
+async def download_video_async(url, output_dir=os.path.join(os.getcwd(), 'videos')):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     video_filename = os.path.basename(url)
     output_path = os.path.join(output_dir, video_filename)
-    trimmed_output = os.path.join(output_dir, f"trimmed_{video_filename}")
 
     try:
         ydl_opts = {
@@ -290,45 +289,11 @@ async def download_and_trim_video_async(url, output_dir=os.path.join(os.getcwd()
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             await loop.run_in_executor(None, lambda: ydl.download([url]))
 
-        # Add explicit cleanup for video processing
-        if os.path.exists(output_path):
-            clip = await loop.run_in_executor(None, lambda: VideoFileClip(output_path))
-            await loop.run_in_executor(None, lambda: clip.close())
-            del clip
-            gc.collect()
-
-        ffmpeg_path = iio_ffmpeg.get_ffmpeg_exe()
-        command = [
-            ffmpeg_path,
-            '-i', output_path,
-            '-t', str(duration),
-            '-c', 'copy',
-            '-y',
-            trimmed_output
-        ]
-        
-        # Run ffmpeg command in thread pool
-        result = await loop.run_in_executor(None, lambda: subprocess.run(command, capture_output=True, text=True, env=os.environ))
-
-        if result.returncode != 0:
-            print(f"FFmpeg command failed with error: {result.stderr}")
-            return None
-
-        # Clean up files
-        await loop.run_in_executor(None, lambda: os.remove(output_path))
-        await loop.run_in_executor(None, lambda: os.rename(trimmed_output, output_path))
         return output_path
 
     except Exception as e:
-        print(f"Failed to download/trim video: {e}")
-        if 'clip' in locals():
-            await loop.run_in_executor(None, lambda: clip.close())
-            del clip
-        gc.collect()
+        print(f"Failed to download video: {e}")
         return None
-    finally:
-        if os.path.exists(trimmed_output):
-            await loop.run_in_executor(None, lambda: os.remove(trimmed_output))
 
 async def upload_gif_to_gcs_async(bucket_name, gif_path):
     loop = asyncio.get_event_loop()
@@ -341,8 +306,7 @@ async def upload_gif_to_gcs_async(bucket_name, gif_path):
     await loop.run_in_executor(None, lambda: blob.upload_from_filename(gif_path, content_type="image/gif"))
     print(f"Uploaded {gif_path} to bucket {bucket_name} at {destination_blob}.")
 
-async def convert_to_gif_async(media_file, max_duration=10, fps=10, output_dir=os.path.join(os.getcwd(), 'gifs')):
-    """Async version of convert_to_gif"""
+async def convert_to_gif(media_file, max_duration=2, fps=3, output_dir=os.path.join(os.getcwd(), 'gifs')):
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
@@ -361,6 +325,7 @@ async def convert_to_gif_async(media_file, max_duration=10, fps=10, output_dir=o
         # Run GIF writing in thread pool
         await loop.run_in_executor(None, lambda: clip.write_gif(output_gif_path))
         print(f"Converted {media_file} to {output_gif_path}")
+        print("File Size", os.path.getsize(output_gif_path))
         return output_gif_path
     except Exception as e:
         print(f"Failed to convert {media_file}: {e}")
@@ -371,60 +336,17 @@ async def convert_to_gif_async(media_file, max_duration=10, fps=10, output_dir=o
             del clip
         gc.collect()
 
-async def resize_gif_async(input_gif, max_size_mb=1.99, processed_dir=os.path.join(os.getcwd(), 'processed_gifs')):
-    """Async version of resize_gif"""
-    if not os.path.exists(processed_dir):
-        os.makedirs(processed_dir)
-
-    loop = asyncio.get_event_loop()
-    clip = None
-    try:
-        # Load video in thread pool
-        clip = await loop.run_in_executor(None, lambda: VideoFileClip(input_gif))
-        fps = clip.fps
-        current_size = os.path.getsize(input_gif)
-
-        if current_size > max_size_mb * 1024 * 1024:
-            reduction_factor = 0.95
-            while current_size > max_size_mb * 1024 * 1024:
-                new_duration = clip.duration * reduction_factor
-                clip = await loop.run_in_executor(None, lambda: clip.subclip(0, new_duration))
-                await loop.run_in_executor(None, lambda: clip.write_gif("temp_resized.gif", fps=fps))
-                current_size = os.path.getsize("temp_resized.gif")
-                os.remove("temp_resized.gif")
-                reduction_factor *= 0.95
-
-            base, ext = os.path.splitext(os.path.basename(input_gif))
-            output_gif = os.path.join(processed_dir, f"{base}{ext}")
-            await loop.run_in_executor(None, lambda: clip.write_gif(output_gif, fps=fps))
-            print(f"Resized GIF saved as {output_gif}, size: {current_size/1024/1024:.2f} MB")
-            return output_gif if current_size <= max_size_mb * 1024 * 1024 else None
-        else:
-            shutil.copy(input_gif, processed_dir)
-            return input_gif
-    finally:
-        if clip:
-            await loop.run_in_executor(None, lambda: clip.close())
-            del clip
-        gc.collect()
-
 async def process_video_async(video_url, output_dir):
     """Process a single video asynchronously"""
     try:
-        video_path = await download_and_trim_video_async(video_url)
+        video_path = await download_video_async(video_url)
         if video_path:
             try:
-                gif_path = await convert_to_gif_async(video_path, output_dir=output_dir)
+                gif_path = await convert_to_gif(video_path, max_duration=2, fps=3, output_dir=output_dir)
                 if gif_path:
-                    try:
-                        resized_gif_path = await resize_gif_async(gif_path)
-                        if resized_gif_path and os.path.exists(resized_gif_path):
-                            await upload_gif_to_gcs_async('tiktok-actor-content', resized_gif_path)
-                            await asyncio.get_event_loop().run_in_executor(None, lambda: os.remove(resized_gif_path))
-                            return True
-                    finally:
-                        if os.path.exists(gif_path):
-                            await asyncio.get_event_loop().run_in_executor(None, lambda: os.remove(gif_path))
+                    await upload_gif_to_gcs_async('tiktok-actor-content', gif_path)
+                    await asyncio.get_event_loop().run_in_executor(None, lambda: os.remove(gif_path))
+                    return True
             finally:
                 if os.path.exists(video_path):
                     await asyncio.get_event_loop().run_in_executor(None, lambda: os.remove(video_path))
@@ -476,7 +398,7 @@ async def process_videos_batch_async(videos, output_dir, batch_size=CLOUD_BATCH_
     return results
 
 # Modify process_videos_from_excel to handle smaller chunks
-def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
+async def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(os.getcwd(), 'gifs')):
     try:
         st.cache_data.clear()
         st.cache_resource.clear()
@@ -522,20 +444,14 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
                     print(f"Processing video URL: {video_url}")
                     
                     # Process video with proper cleanup
-                    video_path = asyncio.run(download_and_trim_video_async(video_url))
+                    video_path = await download_video_async(video_url)
                     if video_path:
                         try:
-                            gif_path = asyncio.run(convert_to_gif_async(video_path, output_dir=output_dir))
+                            gif_path = await convert_to_gif(video_path, output_dir=output_dir)
                             if gif_path:
-                                try:
-                                    resized_gif_path = asyncio.run(resize_gif_async(gif_path))
-                                    if resized_gif_path and os.path.exists(resized_gif_path):
-                                        asyncio.run(upload_gif_to_gcs_async('tiktok-actor-content', resized_gif_path))
-                                        os.remove(resized_gif_path)
-                                        processed_count += 1
-                                finally:
-                                    if os.path.exists(gif_path):
-                                        os.remove(gif_path)
+                                await upload_gif_to_gcs_async('tiktok-actor-content', gif_path)
+                                os.remove(gif_path)
+                                processed_count += 1
                         finally:
                             if os.path.exists(video_path):
                                 os.remove(video_path)
@@ -557,7 +473,7 @@ def process_videos_from_excel(input_excel, sheet_name, output_dir=os.path.join(o
             df.to_excel(output_file_name, index=False)
             
             # Add delay between chunks
-            time.sleep(3)
+            await asyncio.sleep(3)
 
         progress_bar.progress(1.0)
         counter_placeholder.text(f"Completed processing all {processed_count}/{total_videos} videos!")
@@ -647,8 +563,7 @@ if input_excel:
     st.write(f"Found {len(gcs_urls)} GCS URLs")
     st.write(f"Found {len(tiktok_videos)} TikTok videos")
 
-    # Button to start downloading and processing videos
-    if st.button("Download and Process Videos"):
+    async def process_videos():
         # Clear caches before starting the download process
         st.cache_data.clear()
         st.cache_resource.clear()
@@ -657,17 +572,17 @@ if input_excel:
         if youtube_shorts:
             try:
                 with st.spinner("Downloading YouTube Shorts..."):
-                    asyncio.run(yt_shorts_downloader_async(
+                    await yt_shorts_downloader_async(
                         urls=youtube_shorts,
                         bucket_name="tiktok-actor-content"
-                    ))
+                    )
                     gc.collect()
             except Exception as e:
                 print(f"An error occurred while downloading YouTube Shorts: {e}")
         
         # Process TikTok videos using async
         if tiktok_videos:
-            success = asyncio.run(process_tiktok_videos(tiktok_videos))
+            success = await process_tiktok_videos(tiktok_videos)
             if not success:
                 st.error("TikTok video processing failed")
 
@@ -702,7 +617,7 @@ if input_excel:
 
         # Process videos to create GIFs
         with st.spinner("Converting videos to GIFs..."):
-            final_df = process_videos_from_excel(output_file_name, 'Sheet1')
+            final_df = await process_videos_from_excel(output_file_name, 'Sheet1')
             final_df.to_excel(output_file_name, index=False)
         
         # Clear caches before file download
@@ -716,6 +631,10 @@ if input_excel:
             file_name=output_file_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+    # Button to start downloading and processing videos
+    if st.button("Download and Process Videos"):
+        asyncio.run(process_videos())
 
 # Clean up temporary files and resources
 gc.collect()
