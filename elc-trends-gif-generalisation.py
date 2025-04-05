@@ -36,7 +36,7 @@ CLEANUP_FREQUENCY = 2  # Cleanup after every 2 videos
 async def run_actor_task(data: dict):
     """Async version of run_actor_task"""
     headers = {"Content-Type": "application/json"}
-    url = f"https://api.apify.com/v2/actor-tasks/H70fR5ndjUD0loq5H/runs?token=apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
+    url = f"https://api.apify.com/v2/actor-tasks/eKYRHMIgvYqAlh1r3/runs?token=apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
     
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=data, headers=headers) as response:
