@@ -19,6 +19,7 @@ import aiohttp
 import asyncio
 from typing import List
 import psutil
+import logging
 
 # Initialize memory tracking
 tracemalloc.start()
@@ -30,6 +31,13 @@ memory_placeholder = st.empty()  # Global placeholder for memory usage
 CLOUD_BATCH_SIZE = 3  # Smaller batch size for cloud processing
 MEMORY_LIMIT_MB = 700  # Memory limit for cloud environment
 CLEANUP_FREQUENCY = 2  # Cleanup after every 2 videos
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+
+# Limit for concurrent GIF conversions
+GIF_CONVERSION_LIMIT = 2
+semaphore = asyncio.Semaphore(GIF_CONVERSION_LIMIT)
 
 ############## Helper functions starts #############
 
@@ -312,23 +320,24 @@ async def convert_to_gif(media_file, max_duration=2, fps=3, output_dir=os.path.j
 
     clip = None
     try:
-        # Run video processing in a thread pool to not block the event loop
-        loop = asyncio.get_event_loop()
-        clip = await loop.run_in_executor(None, lambda: VideoFileClip(media_file))
-        
-        if clip.duration > max_duration:
-            clip = await loop.run_in_executor(None, lambda: clip.subclip(0, max_duration))
+        async with semaphore:  # Limit concurrent conversions
+            # Run video processing in a thread pool to not block the event loop
+            loop = asyncio.get_event_loop()
+            clip = await loop.run_in_executor(None, lambda: VideoFileClip(media_file))
+            
+            if clip.duration > max_duration:
+                clip = await loop.run_in_executor(None, lambda: clip.subclip(0, max_duration))
 
-        clip = await loop.run_in_executor(None, lambda: clip.set_fps(fps))
-        output_gif_path = os.path.join(output_dir, os.path.splitext(os.path.basename(media_file))[0] + '.gif')
-        
-        # Run GIF writing in thread pool
-        await loop.run_in_executor(None, lambda: clip.write_gif(output_gif_path))
-        print(f"Converted {media_file} to {output_gif_path}")
-        print("File Size", os.path.getsize(output_gif_path))
-        return output_gif_path
+            clip = await loop.run_in_executor(None, lambda: clip.set_fps(fps))
+            output_gif_path = os.path.join(output_dir, os.path.splitext(os.path.basename(media_file))[0] + '.gif')
+            
+            # Run GIF writing in thread pool
+            await loop.run_in_executor(None, lambda: clip.write_gif(output_gif_path))
+            logging.info(f"Converted {media_file} to {output_gif_path}")
+            logging.info("File Size: %s", os.path.getsize(output_gif_path))
+            return output_gif_path
     except Exception as e:
-        print(f"Failed to convert {media_file}: {e}")
+        logging.error(f"Failed to convert {media_file}: {e}")
         return None
     finally:
         if clip:
@@ -347,12 +356,14 @@ async def process_video_async(video_url, output_dir):
                     await upload_gif_to_gcs_async('tiktok-actor-content', gif_path)
                     await asyncio.get_event_loop().run_in_executor(None, lambda: os.remove(gif_path))
                     return True
+            except Exception as e:
+                logging.error(f"Error during processing video {video_url}: {e}")
             finally:
                 if os.path.exists(video_path):
                     await asyncio.get_event_loop().run_in_executor(None, lambda: os.remove(video_path))
         return False
     except Exception as e:
-        print(f"Error processing video {video_url}: {str(e)}")
+        logging.error(f"Error processing video {video_url}: {str(e)}")
         return False
 
 # Add this function for memory monitoring
