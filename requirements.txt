@@ -11,3 +11,4 @@ imageio-ffmpeg
 aiohttp
 asyncio
 psutil
+httpx
