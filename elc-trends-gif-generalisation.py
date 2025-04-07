@@ -10,6 +10,8 @@ from google.cloud import storage
 import json
 import tempfile
 import shutil
+import requests
+import time
 
 # Extract the secret and create temporary credentials file
 gcp_secret = st.secrets["gcp_secret"]
@@ -40,11 +42,27 @@ async def get_items(dataset_id: str) -> dict:
 # Function to convert video to GIF and return the path
 def convert_to_gif(media_file, video_id, max_duration=2, fps=3):
     temp_gif_path = f"{video_id}.gif"
+    max_size_mb = 1.99  # Maximum size in MB
+    
     with VideoFileClip(media_file) as clip:
         if clip.duration > max_duration:
             clip = clip.subclip(0, max_duration)
+        
+        # Initial conversion
         clip = clip.set_fps(fps)
         clip.write_gif(temp_gif_path)
+        
+        # Check size and resize if needed
+        current_size = os.path.getsize(temp_gif_path)
+        if current_size > max_size_mb * 1024 * 1024:
+            reduction_factor = 0.95  # Initial reduction by 5%
+            while current_size > max_size_mb * 1024 * 1024 and clip.duration > 1:
+                new_duration = clip.duration * reduction_factor
+                clip = clip.subclip(0, new_duration)
+                clip.write_gif(temp_gif_path, fps=fps)
+                current_size = os.path.getsize(temp_gif_path)
+                reduction_factor *= 0.95  # Reduce the duration further
+    
     return temp_gif_path
 
 # Function to upload GIF to GCS
@@ -55,6 +73,37 @@ def upload_gif_to_gcs(local_file_path: str, video_id: str, bucket_name: str, gcs
     blob = bucket.blob(gcs_blob_path)
     blob.upload_from_filename(local_file_path)
     return f"https://storage.googleapis.com/{bucket_name}/{gcs_blob_path}"
+
+def check_run_status(run_id: str, api_token: str, status_placeholder) -> bool:
+    """Check status of a single Apify run (synchronous version)"""
+    url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={api_token}"
+    retry_delay = 5
+
+    while True:
+        try:
+            response = requests.get(url)
+            if response.status_code == 200:
+                run_data = response.json()
+                status = run_data.get('data', {}).get('status')
+                
+                if status == 'SUCCEEDED':
+                    status_placeholder.success(f"Run {run_id}: SUCCEEDED")
+                    return True
+                elif status == 'FAILED':
+                    status_placeholder.error(f"Run {run_id}: FAILED")
+                    return False
+                elif status == 'RUNNING':
+                    status_placeholder.info(f"Run {run_id}: Still running...")
+                    time.sleep(5)
+                else:
+                    status_placeholder.warning(f"Run {run_id}: Unknown status - {status}")
+                    return False
+            else:
+                raise Exception(f"HTTP {response.status_code}")
+
+        except Exception as e:
+            status_placeholder.warning(f"Run {run_id}: Request failed - {str(e)}")
+            time.sleep(retry_delay)
 
 # Streamlit UI
 st.title("TikTok Video to GIF Converter")
@@ -83,84 +132,95 @@ if st.button("Process"):
 
         st.write("Running the Apify actor task...")
         response = asyncio.run(run_actor_task(input_params))
+        run_id = response.json()["data"]["id"]
         dataset_id = response.json()["data"]["defaultDatasetId"]
-        st.write(f"Actor task completed. Dataset ID: {dataset_id}")
-
-        st.write("Fetching items from the dataset...")
-        dataset = asyncio.run(get_items(dataset_id))
-        st.write(f"Fetched {len(dataset)} items from the dataset.")
-
-        all_items_dict = {}
-        for raw_row in dataset:
-            try:
-                original_url = raw_row["submittedVideoUrl"]
-                all_items_dict[original_url] = {
-                    "Gcs Url": raw_row["gcsMediaUrls"][0]
-                }
-            except Exception as e:
-                st.error(f"Error processing row: {raw_row} - {e}")
-
-        for input_dict in input_list_of_dicts:
-            clean_url = input_dict["Links"]
-            video_id = clean_url.split("?")[0].split("/")[-1]
-            input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
-
-        output_df = pd.DataFrame(input_list_of_dicts)
-        output_df.to_csv(f"{country_name}_duration.csv", index=False, encoding="utf_8_sig")
-        st.write(f"Generated CSV file: {country_name}_duration.csv")
-
-        # Download videos and convert to GIFs
-        df = pd.read_csv(f"{country_name}_duration.csv")
-        list_of_dicts = df.to_dict(orient="records")
-
-        # Initialize overall progress bar
-        total_videos = len(list_of_dicts)
-        overall_progress = st.progress(0, text=f"Processing {total_videos} videos...")
         
-        for index, raw_row in enumerate(list_of_dicts, 1):
-            gcs_url = raw_row["Gcs Url"]
-            try:
-                video_id = gcs_url.split("/")[-1].split(".")[0]
-                
-                # Create a temporary file for the video
-                temp_video_path = f"{video_id}.mp4"
-                urllib.request.urlretrieve(gcs_url, temp_video_path)
-                
-                gif_path = convert_to_gif(temp_video_path, video_id)
-                
-                # Upload GIF to GCS
-                bucket_name = "tiktok-actor-content"
-                gcs_folder = "gifs_20240419"
-                
-                gif_url = upload_gif_to_gcs(gif_path, video_id, bucket_name, gcs_folder)
-                
-                # Clean up temporary files
-                os.unlink(temp_video_path)
-                os.unlink(gif_path)
-                
-                raw_row["GIF"] = gif_url
-                
-                # Update overall progress
-                progress_percent = int((index / total_videos) * 100)
-                overall_progress.progress(progress_percent, text=f"Processed {index}/{total_videos} videos")
-                
-            except Exception as e:
-                st.error(f"Error processing video: {gcs_url} - {e}")
-
-        output_df = pd.DataFrame(list_of_dicts)
-        output_df.to_csv(f"{country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
+        # Create a placeholder for status updates
+        status_placeholder = st.empty()
         
-        overall_progress.progress(100, text="All videos processed successfully!")
-        st.success("Processing complete! Check the generated CSV file for GIF URLs.")
+        # Check run status
+        api_token = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
+        if check_run_status(run_id, api_token, status_placeholder):
+            st.write("Apify task completed successfully. Starting GIF conversion...")
+            
+            st.write("Fetching items from the dataset...")
+            dataset = asyncio.run(get_items(dataset_id))
+            st.write(f"Fetched {len(dataset)} items from the dataset.")
 
-        # Add download button for the CSV file
-        with open(f"{country_name}_trend_gifs.csv", "rb") as file:
-            st.download_button(
-                label="Download CSV File",
-                data=file,
-                file_name=f"{country_name}_trend_gifs.csv",
-                mime="text/csv"
-            )
+            all_items_dict = {}
+            for raw_row in dataset:
+                try:
+                    original_url = raw_row["submittedVideoUrl"]
+                    all_items_dict[original_url] = {
+                        "Gcs Url": raw_row["gcsMediaUrls"][0]
+                    }
+                except Exception as e:
+                    st.error(f"Error processing row: {raw_row} - {e}")
+
+            for input_dict in input_list_of_dicts:
+                clean_url = input_dict["Links"]
+                video_id = clean_url.split("?")[0].split("/")[-1]
+                input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
+
+            output_df = pd.DataFrame(input_list_of_dicts)
+            output_df.to_csv(f"{country_name}_duration.csv", index=False, encoding="utf_8_sig")
+            st.write(f"Generated CSV file: {country_name}_duration.csv")
+
+            # Download videos and convert to GIFs
+            df = pd.read_csv(f"{country_name}_duration.csv")
+            list_of_dicts = df.to_dict(orient="records")
+
+            # Initialize overall progress bar
+            total_videos = len(list_of_dicts)
+            overall_progress = st.progress(0, text=f"Processing {total_videos} videos...")
+            
+            for index, raw_row in enumerate(list_of_dicts, 1):
+                gcs_url = raw_row["Gcs Url"]
+                try:
+                    video_id = gcs_url.split("/")[-1].split(".")[0]
+                    
+                    # Create a temporary file for the video
+                    temp_video_path = f"{video_id}.mp4"
+                    urllib.request.urlretrieve(gcs_url, temp_video_path)
+                    
+                    gif_path = convert_to_gif(temp_video_path, video_id)
+                    
+                    # Upload GIF to GCS
+                    bucket_name = "tiktok-actor-content"
+                    gcs_folder = "gifs_20240419"
+                    
+                    gif_url = upload_gif_to_gcs(gif_path, video_id, bucket_name, gcs_folder)
+                    
+                    # Clean up temporary files
+                    os.unlink(temp_video_path)
+                    os.unlink(gif_path)
+                    
+                    raw_row["GIF"] = gif_url
+                    
+                    # Update overall progress
+                    progress_percent = int((index / total_videos) * 100)
+                    overall_progress.progress(progress_percent, text=f"Processed {index}/{total_videos} videos")
+                    
+                except Exception as e:
+                    st.error(f"Error processing video: {gcs_url} - {e}")
+
+            output_df = pd.DataFrame(list_of_dicts)
+            output_df.to_csv(f"{country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
+            
+            overall_progress.progress(100, text="All videos processed successfully!")
+            st.success("Processing complete! Check the generated CSV file for GIF URLs.")
+
+            # Add download button for the CSV file
+            with open(f"{country_name}_trend_gifs.csv", "rb") as file:
+                st.download_button(
+                    label="Download CSV File",
+                    data=file,
+                    file_name=f"{country_name}_trend_gifs.csv",
+                    mime="text/csv"
+                )
+
+        else:
+            st.error("Apify task failed. Please try again.")
 
     else:
         st.error("Please upload a file and enter a country name.")
