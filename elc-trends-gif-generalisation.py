@@ -12,7 +12,6 @@ import tempfile
 import shutil
 import requests
 import time
-from datetime import datetime
 
 # Initialize session state
 if 'apify_status' not in st.session_state:
@@ -29,18 +28,6 @@ if 'final_results' not in st.session_state:
     st.session_state.final_results = None
 if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
-if 'start_time' not in st.session_state:
-    st.session_state.start_time = None
-if 'end_time' not in st.session_state:
-    st.session_state.end_time = None
-if 'apify_start_time' not in st.session_state:
-    st.session_state.apify_start_time = None
-if 'apify_end_time' not in st.session_state:
-    st.session_state.apify_end_time = None
-if 'gif_start_time' not in st.session_state:
-    st.session_state.gif_start_time = None
-if 'gif_end_time' not in st.session_state:
-    st.session_state.gif_end_time = None
 
 # Extract the secret and create temporary credentials file
 gcp_secret = st.secrets["gcp_secret"]
@@ -116,24 +103,15 @@ def check_run_status(run_id: str, api_token: str, status_placeholder) -> bool:
                 status = run_data.get('data', {}).get('status')
                 
                 if status == 'SUCCEEDED':
-                    st.session_state.apify_end_time = datetime.now()
-                    apify_duration = st.session_state.apify_end_time - st.session_state.apify_start_time
-                    hours, remainder = divmod(apify_duration.total_seconds(), 3600)
-                    minutes, seconds = divmod(remainder, 60)
-                    status_placeholder.success(f"Run {run_id}: SUCCEEDED (Time taken: {int(hours)}h {int(minutes)}m {int(seconds)}s)")
+                    status_placeholder.success(f"Run {run_id}: SUCCEEDED")
                     st.session_state.apify_status = 'SUCCEEDED'
                     return True
                 elif status == 'FAILED':
-                    st.session_state.apify_end_time = datetime.now()
                     status_placeholder.error(f"Run {run_id}: FAILED")
                     st.session_state.apify_status = 'FAILED'
                     return False
                 elif status == 'RUNNING':
-                    current_time = datetime.now()
-                    running_duration = current_time - st.session_state.apify_start_time
-                    hours, remainder = divmod(running_duration.total_seconds(), 3600)
-                    minutes, seconds = divmod(remainder, 60)
-                    status_placeholder.info(f"Run {run_id}: Still running... (Running for: {int(hours)}h {int(minutes)}m {int(seconds)}s)")
+                    status_placeholder.info(f"Run {run_id}: Still running...")
                     st.session_state.apify_status = 'RUNNING'
                     time.sleep(5)
                 else:
@@ -194,10 +172,6 @@ if st.session_state.apify_status == 'SUCCEEDED' and not st.session_state.process
     try:
         st.write("Apify task completed successfully. Starting GIF conversion...")
         
-        # Store GIF conversion start time
-        st.session_state.gif_start_time = datetime.now()
-        st.write(f"GIF conversion started at: {st.session_state.gif_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-
         st.write("Fetching items from the dataset...")
         dataset = asyncio.run(get_items(st.session_state.dataset_id))
         st.write(f"Fetched {len(dataset)} items from the dataset.")
@@ -267,37 +241,14 @@ if st.session_state.apify_status == 'SUCCEEDED' and not st.session_state.process
         st.session_state.final_results.to_csv(f"{st.session_state.country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
         st.session_state.processing_complete = True
         
-        # Store end times and calculate durations
-        st.session_state.gif_end_time = datetime.now()
-        st.session_state.end_time = datetime.now()
-        
-        # Calculate durations
-        total_duration = st.session_state.end_time - st.session_state.start_time
-        apify_duration = st.session_state.apify_end_time - st.session_state.apify_start_time
-        gif_duration = st.session_state.gif_end_time - st.session_state.gif_start_time
-        
-        # Format durations
-        def format_duration(duration):
-            hours, remainder = divmod(duration.total_seconds(), 3600)
-            minutes, seconds = divmod(remainder, 60)
-            return f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
-        
         overall_progress.progress(100, text="All videos processed successfully!")
         st.success("Processing complete!")
-        st.write(f"Process started at: {st.session_state.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        st.write(f"Process completed at: {st.session_state.end_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        st.write("Time breakdown:")
-        st.write(f"- Total time: {format_duration(total_duration)}")
-        st.write(f"- Apify task: {format_duration(apify_duration)}")
-        st.write(f"- GIF conversion: {format_duration(gif_duration)}")
 
     except Exception as e:
         st.error(f"Error during GIF conversion: {str(e)}")
         # Reset session state on error
         st.session_state.processing_complete = False
         st.session_state.final_results = None
-        st.session_state.gif_start_time = None
-        st.session_state.gif_end_time = None
 
 # Show download button if processing is complete
 if st.session_state.processing_complete and st.session_state.final_results is not None:
@@ -318,9 +269,3 @@ elif st.session_state.apify_status == 'FAILED':
     st.session_state.dataset_id = None
     st.session_state.processing_complete = False
     st.session_state.final_results = None
-    st.session_state.start_time = None
-    st.session_state.end_time = None
-    st.session_state.apify_start_time = None
-    st.session_state.apify_end_time = None
-    st.session_state.gif_start_time = None
-    st.session_state.gif_end_time = None
