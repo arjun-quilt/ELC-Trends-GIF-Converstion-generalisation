@@ -12,6 +12,7 @@ import tempfile
 import shutil
 import requests
 import time
+from datetime import datetime
 
 # Initialize session state
 if 'apify_status' not in st.session_state:
@@ -28,6 +29,18 @@ if 'final_results' not in st.session_state:
     st.session_state.final_results = None
 if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
+if 'start_time' not in st.session_state:
+    st.session_state.start_time = None
+if 'end_time' not in st.session_state:
+    st.session_state.end_time = None
+if 'apify_start_time' not in st.session_state:
+    st.session_state.apify_start_time = None
+if 'apify_end_time' not in st.session_state:
+    st.session_state.apify_end_time = None
+if 'gif_start_time' not in st.session_state:
+    st.session_state.gif_start_time = None
+if 'gif_end_time' not in st.session_state:
+    st.session_state.gif_end_time = None
 
 # Extract the secret and create temporary credentials file
 gcp_secret = st.secrets["gcp_secret"]
@@ -103,15 +116,24 @@ def check_run_status(run_id: str, api_token: str, status_placeholder) -> bool:
                 status = run_data.get('data', {}).get('status')
                 
                 if status == 'SUCCEEDED':
-                    status_placeholder.success(f"Run {run_id}: SUCCEEDED")
+                    st.session_state.apify_end_time = datetime.now()
+                    apify_duration = st.session_state.apify_end_time - st.session_state.apify_start_time
+                    hours, remainder = divmod(apify_duration.total_seconds(), 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    status_placeholder.success(f"Run {run_id}: SUCCEEDED (Time taken: {int(hours)}h {int(minutes)}m {int(seconds)}s)")
                     st.session_state.apify_status = 'SUCCEEDED'
                     return True
                 elif status == 'FAILED':
+                    st.session_state.apify_end_time = datetime.now()
                     status_placeholder.error(f"Run {run_id}: FAILED")
                     st.session_state.apify_status = 'FAILED'
                     return False
                 elif status == 'RUNNING':
-                    status_placeholder.info(f"Run {run_id}: Still running... (Last checked: {time.strftime('%H:%M:%S')})")
+                    current_time = datetime.now()
+                    running_duration = current_time - st.session_state.apify_start_time
+                    hours, remainder = divmod(running_duration.total_seconds(), 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    status_placeholder.info(f"Run {run_id}: Still running... (Running for: {int(hours)}h {int(minutes)}m {int(seconds)}s)")
                     st.session_state.apify_status = 'RUNNING'
                     time.sleep(5)
                 else:
@@ -169,76 +191,113 @@ if st.session_state.apify_status == 'RUNNING':
 
 # If Apify task succeeded, proceed with GIF conversion
 if st.session_state.apify_status == 'SUCCEEDED' and not st.session_state.processing_complete:
-    st.write("Apify task completed successfully. Starting GIF conversion...")
-    
-    st.write("Fetching items from the dataset...")
-    dataset = asyncio.run(get_items(st.session_state.dataset_id))
-    st.write(f"Fetched {len(dataset)} items from the dataset.")
+    try:
+        st.write("Apify task completed successfully. Starting GIF conversion...")
+        
+        # Store GIF conversion start time
+        st.session_state.gif_start_time = datetime.now()
+        st.write(f"GIF conversion started at: {st.session_state.gif_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    all_items_dict = {}
-    for raw_row in dataset:
-        try:
-            original_url = raw_row["submittedVideoUrl"]
-            all_items_dict[original_url] = {
-                "Gcs Url": raw_row["gcsMediaUrls"][0]
-            }
-        except Exception as e:
-            st.error(f"Error processing row: {raw_row} - {e}")
+        st.write("Fetching items from the dataset...")
+        dataset = asyncio.run(get_items(st.session_state.dataset_id))
+        st.write(f"Fetched {len(dataset)} items from the dataset.")
 
-    for input_dict in st.session_state.input_list_of_dicts:
-        clean_url = input_dict["Links"]
-        video_id = clean_url.split("?")[0].split("/")[-1]
-        input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
+        all_items_dict = {}
+        for raw_row in dataset:
+            try:
+                original_url = raw_row["submittedVideoUrl"]
+                all_items_dict[original_url] = {
+                    "Gcs Url": raw_row["gcsMediaUrls"][0]
+                }
+            except Exception as e:
+                st.error(f"Error processing row: {raw_row} - {e}")
 
-    output_df = pd.DataFrame(st.session_state.input_list_of_dicts)
-    output_df.to_csv(f"{st.session_state.country_name}_duration.csv", index=False, encoding="utf_8_sig")
-    st.write(f"Generated CSV file: {st.session_state.country_name}_duration.csv")
+        for input_dict in st.session_state.input_list_of_dicts:
+            clean_url = input_dict["Links"]
+            video_id = clean_url.split("?")[0].split("/")[-1]
+            input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
 
-    # Download videos and convert to GIFs
-    df = pd.read_csv(f"{st.session_state.country_name}_duration.csv")
-    list_of_dicts = df.to_dict(orient="records")
+        output_df = pd.DataFrame(st.session_state.input_list_of_dicts)
+        output_df.to_csv(f"{st.session_state.country_name}_duration.csv", index=False, encoding="utf_8_sig")
+        st.write(f"Generated CSV file: {st.session_state.country_name}_duration.csv")
 
-    # Initialize overall progress bar
-    total_videos = len(list_of_dicts)
-    overall_progress = st.progress(0, text=f"Processing {total_videos} videos...")
-    
-    for index, raw_row in enumerate(list_of_dicts, 1):
-        gcs_url = raw_row["Gcs Url"]
-        try:
-            video_id = gcs_url.split("/")[-1].split(".")[0]
-            
-            # Create a temporary file for the video
-            temp_video_path = f"{video_id}.mp4"
-            urllib.request.urlretrieve(gcs_url, temp_video_path)
-            
-            gif_path = convert_to_gif(temp_video_path, video_id)
-            
-            # Upload GIF to GCS
-            bucket_name = "tiktok-actor-content"
-            gcs_folder = "gifs_20240419"
-            
-            gif_url = upload_gif_to_gcs(gif_path, video_id, bucket_name, gcs_folder)
-            
-            # Clean up temporary files
-            os.unlink(temp_video_path)
-            os.unlink(gif_path)
-            
-            raw_row["GIF"] = gif_url
-            
-            # Update overall progress
-            progress_percent = int((index / total_videos) * 100)
-            overall_progress.progress(progress_percent, text=f"Processed {index}/{total_videos} videos")
-            
-        except Exception as e:
-            st.error(f"Error processing video: {gcs_url} - {e}")
+        # Download videos and convert to GIFs
+        df = pd.read_csv(f"{st.session_state.country_name}_duration.csv")
+        list_of_dicts = df.to_dict(orient="records")
 
-    # Store final results in session state
-    st.session_state.final_results = pd.DataFrame(list_of_dicts)
-    st.session_state.final_results.to_csv(f"{st.session_state.country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
-    st.session_state.processing_complete = True
-    
-    overall_progress.progress(100, text="All videos processed successfully!")
-    st.success("Processing complete! Check the generated CSV file for GIF URLs.")
+        # Initialize overall progress bar
+        total_videos = len(list_of_dicts)
+        overall_progress = st.progress(0, text=f"Processing {total_videos} videos...")
+
+        # Process each video
+        for i, row in enumerate(list_of_dicts):
+            try:
+                # Update progress
+                progress_percent = (i + 1) / total_videos
+                overall_progress.progress(progress_percent, text=f"Processing video {i + 1}/{total_videos}...")
+
+                # Download video
+                video_url = row["Gcs Url"]
+                video_path = f"temp_video_{i}.mp4"
+                urllib.request.urlretrieve(video_url, video_path)
+
+                # Convert to GIF
+                clip = VideoFileClip(video_path)
+                gif_path = f"output_{i}.gif"
+                clip.write_gif(gif_path, fps=10)
+
+                # Upload to GCS
+                bucket_name = "tiktok-actor-content"
+                gcs_path = f"{st.session_state.country_name}_gifs/{os.path.basename(gif_path)}"
+                upload_gif_to_gcs(gif_path, video_id, bucket_name, gcs_path)
+
+                # Update row with GIF URL
+                row["Gif Url"] = f"https://storage.googleapis.com/{bucket_name}/{gcs_path}"
+
+                # Clean up temporary files
+                os.remove(video_path)
+                os.remove(gif_path)
+
+            except Exception as e:
+                st.error(f"Error processing video {i + 1}: {str(e)}")
+                continue
+
+        # Store final results in session state
+        st.session_state.final_results = pd.DataFrame(list_of_dicts)
+        st.session_state.final_results.to_csv(f"{st.session_state.country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
+        st.session_state.processing_complete = True
+        
+        # Store end times and calculate durations
+        st.session_state.gif_end_time = datetime.now()
+        st.session_state.end_time = datetime.now()
+        
+        # Calculate durations
+        total_duration = st.session_state.end_time - st.session_state.start_time
+        apify_duration = st.session_state.apify_end_time - st.session_state.apify_start_time
+        gif_duration = st.session_state.gif_end_time - st.session_state.gif_start_time
+        
+        # Format durations
+        def format_duration(duration):
+            hours, remainder = divmod(duration.total_seconds(), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            return f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
+        
+        overall_progress.progress(100, text="All videos processed successfully!")
+        st.success("Processing complete!")
+        st.write(f"Process started at: {st.session_state.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        st.write(f"Process completed at: {st.session_state.end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        st.write("Time breakdown:")
+        st.write(f"- Total time: {format_duration(total_duration)}")
+        st.write(f"- Apify task: {format_duration(apify_duration)}")
+        st.write(f"- GIF conversion: {format_duration(gif_duration)}")
+
+    except Exception as e:
+        st.error(f"Error during GIF conversion: {str(e)}")
+        # Reset session state on error
+        st.session_state.processing_complete = False
+        st.session_state.final_results = None
+        st.session_state.gif_start_time = None
+        st.session_state.gif_end_time = None
 
 # Show download button if processing is complete
 if st.session_state.processing_complete and st.session_state.final_results is not None:
@@ -259,3 +318,9 @@ elif st.session_state.apify_status == 'FAILED':
     st.session_state.dataset_id = None
     st.session_state.processing_complete = False
     st.session_state.final_results = None
+    st.session_state.start_time = None
+    st.session_state.end_time = None
+    st.session_state.apify_start_time = None
+    st.session_state.apify_end_time = None
+    st.session_state.gif_start_time = None
+    st.session_state.gif_end_time = None
