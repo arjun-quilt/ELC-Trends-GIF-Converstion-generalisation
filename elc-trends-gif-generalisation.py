@@ -12,6 +12,7 @@ import tempfile
 import shutil
 import requests
 import time
+from typing import List
 
 # Extract the secret and create temporary credentials file
 gcp_secret = st.secrets["gcp_secret"]
@@ -42,27 +43,11 @@ async def get_items(dataset_id: str) -> dict:
 # Function to convert video to GIF and return the path
 def convert_to_gif(media_file, video_id, max_duration=2, fps=3):
     temp_gif_path = f"{video_id}.gif"
-    max_size_mb = 1.99  # Maximum size in MB
-    
     with VideoFileClip(media_file) as clip:
         if clip.duration > max_duration:
             clip = clip.subclip(0, max_duration)
-        
-        # Initial conversion
         clip = clip.set_fps(fps)
         clip.write_gif(temp_gif_path)
-        
-        # Check size and resize if needed
-        current_size = os.path.getsize(temp_gif_path)
-        if current_size > max_size_mb * 1024 * 1024:
-            reduction_factor = 0.95  # Initial reduction by 5%
-            while current_size > max_size_mb * 1024 * 1024 and clip.duration > 1:
-                new_duration = clip.duration * reduction_factor
-                clip = clip.subclip(0, new_duration)
-                clip.write_gif(temp_gif_path, fps=fps)
-                current_size = os.path.getsize(temp_gif_path)
-                reduction_factor *= 0.95  # Reduce the duration further
-    
     return temp_gif_path
 
 # Function to upload GIF to GCS
@@ -74,36 +59,94 @@ def upload_gif_to_gcs(local_file_path: str, video_id: str, bucket_name: str, gcs
     blob.upload_from_filename(local_file_path)
     return f"https://storage.googleapis.com/{bucket_name}/{gcs_blob_path}"
 
-def check_run_status(run_id: str, api_token: str, status_placeholder) -> bool:
-    """Check status of a single Apify run (synchronous version)"""
+async def check_run_status(run_id: str, api_token: str, status_placeholder) -> bool:
+    """Check status of a single Apify run (asynchronous version)"""
     url = f"https://api.apify.com/v2/actor-runs/{run_id}?token={api_token}"
     retry_delay = 5
 
     while True:
         try:
-            response = requests.get(url)
-            if response.status_code == 200:
-                run_data = response.json()
-                status = run_data.get('data', {}).get('status')
-                
-                if status == 'SUCCEEDED':
-                    status_placeholder.success(f"Run {run_id}: SUCCEEDED")
-                    return True
-                elif status == 'FAILED':
-                    status_placeholder.error(f"Run {run_id}: FAILED")
-                    return False
-                elif status == 'RUNNING':
-                    status_placeholder.info(f"Run {run_id}: Still running... (Last checked: {time.strftime('%H:%M:%S')})")
-                    time.sleep(5)
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url)
+                if response.status_code == 200:
+                    run_data = response.json()
+                    status = run_data.get('data', {}).get('status')
+                    
+                    if status == 'SUCCEEDED':
+                        status_placeholder.success(f"Run {run_id}: SUCCEEDED")
+                        return True
+                    elif status == 'FAILED':
+                        status_placeholder.error(f"Run {run_id}: FAILED")
+                        return False
+                    elif status == 'RUNNING':
+                        status_placeholder.info(f"Run {run_id}: Still running... (Last checked: {time.strftime('%H:%M:%S')})")
+                        await asyncio.sleep(5)
+                    else:
+                        status_placeholder.warning(f"Run {run_id}: Unknown status - {status}")
+                        return False
                 else:
-                    status_placeholder.warning(f"Run {run_id}: Unknown status - {status}")
-                    return False
-            else:
-                raise Exception(f"HTTP {response.status_code}")
+                    raise Exception(f"HTTP {response.status_code}")
 
         except Exception as e:
             status_placeholder.warning(f"Run {run_id}: Request failed - {str(e)}")
-            time.sleep(retry_delay)
+            await asyncio.sleep(retry_delay)
+
+async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
+    """Process all TikTok videos in parallel batches"""
+    if not tiktok_videos:
+        return True, None
+
+    # Split videos into batches
+    batches = [tiktok_videos[i:i + batch_size] for i in range(0, len(tiktok_videos), batch_size)]
+    
+    status_placeholder = st.empty()
+    
+    # Start all batches
+    with st.spinner(f"Processing {len(tiktok_videos)} TikTok videos in {len(batches)} batches..."):
+        try:
+            # Launch all actor tasks
+            tasks = []
+            for batch in batches:
+                input_params = {
+                    "disableCheerioBoost": False,
+                    "disableEnrichAuthorStats": False,
+                    "resultsPerPage": 1,
+                    "searchSection": "/video",
+                    "shouldDownloadCovers": True,
+                    "shouldDownloadSlideshowImages": False,
+                    "shouldDownloadVideos": True,
+                    "maxProfilesPerQuery": 10,
+                    "tiktokMemoryMb": "default",
+                    "postURLs": batch
+                }
+                tasks.append(run_actor_task(input_params))
+            
+            responses = await asyncio.gather(*tasks)
+            run_ids = [response.json()['data']['id'] for response in responses]
+            st.write(f"Started {len(run_ids)} Apify runs")
+
+            # Check status of all runs
+            status_tasks = []
+            API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
+            for run_id in run_ids:
+                status_tasks.append(check_run_status(run_id, API_TOKEN, status_placeholder))
+            
+            # Wait for all status checks to complete
+            results = await asyncio.gather(*status_tasks)
+            
+            # Check if all runs succeeded
+            if all(results):
+                st.success("All Apify runs completed successfully!")
+                # Get dataset IDs from all successful runs
+                dataset_ids = [response.json()["data"]["defaultDatasetId"] for response in responses]
+                return True, dataset_ids
+            else:
+                st.error("Some Apify runs failed. Please check the logs above.")
+                return False, None
+                
+        except Exception as e:
+            st.error(f"Error during batch processing: {str(e)}")
+            return False, None
 
 # Streamlit UI
 st.title("TikTok Video to GIF Converter")
@@ -114,39 +157,26 @@ country_name = st.text_input("Enter the country name (sheet name)")
 if st.button("Process"):
     if uploaded_file and country_name:
         input_list_of_dicts = pd.read_excel(uploaded_file, sheet_name=country_name).to_dict(orient="records")
-
-        input_params = {
-            "disableCheerioBoost": False,
-            "disableEnrichAuthorStats": False,
-            "resultsPerPage": 1,
-            "searchSection": "/video",
-            "shouldDownloadCovers": True,
-            "shouldDownloadSlideshowImages": False,
-            "shouldDownloadVideos": True,
-            "maxProfilesPerQuery": 10,
-            "tiktokMemoryMb": "default",
-            "postURLs": [row["Links"] for row in input_list_of_dicts],
-        }
-
-        st.write("Running the Apify actor task...")
-        response = asyncio.run(run_actor_task(input_params))
-        run_id = response.json()["data"]["id"]
-        dataset_id = response.json()["data"]["defaultDatasetId"]
         
-        # Create a placeholder for status updates
-        status_placeholder = st.empty()
+        # Extract video URLs
+        video_urls = [row["Links"] for row in input_list_of_dicts]
         
-        # Check run status
-        api_token = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
-        if check_run_status(run_id, api_token, status_placeholder):
-            st.write("Apify task completed successfully. Starting GIF conversion...")
+        # Process videos in batches
+        success, dataset_ids = asyncio.run(process_tiktok_videos(video_urls))
+        if success:
+            st.write("All videos processed successfully. Fetching dataset items...")
             
-            st.write("Fetching items from the dataset...")
-            dataset = asyncio.run(get_items(dataset_id))
-            st.write(f"Fetched {len(dataset)} items from the dataset.")
-
+            # Fetch items from all datasets
+            all_items = []
+            for dataset_id in dataset_ids:
+                st.write(f"Fetching items from dataset {dataset_id}...")
+                dataset = asyncio.run(get_items(dataset_id))
+                all_items.extend(dataset)
+            
+            st.write(f"Fetched {len(all_items)} items from all datasets.")
+            
             all_items_dict = {}
-            for raw_row in dataset:
+            for raw_row in all_items:
                 try:
                     original_url = raw_row["submittedVideoUrl"]
                     all_items_dict[original_url] = {
