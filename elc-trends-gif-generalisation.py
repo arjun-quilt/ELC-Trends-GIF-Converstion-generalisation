@@ -24,6 +24,10 @@ if 'input_list_of_dicts' not in st.session_state:
     st.session_state.input_list_of_dicts = None
 if 'country_name' not in st.session_state:
     st.session_state.country_name = None
+if 'final_results' not in st.session_state:
+    st.session_state.final_results = None
+if 'processing_complete' not in st.session_state:
+    st.session_state.processing_complete = False
 
 # Extract the secret and create temporary credentials file
 gcp_secret = st.secrets["gcp_secret"]
@@ -164,7 +168,7 @@ if st.session_state.apify_status == 'RUNNING':
     check_run_status(st.session_state.run_id, "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk", status_placeholder)
 
 # If Apify task succeeded, proceed with GIF conversion
-if st.session_state.apify_status == 'SUCCEEDED':
+if st.session_state.apify_status == 'SUCCEEDED' and not st.session_state.processing_complete:
     st.write("Apify task completed successfully. Starting GIF conversion...")
     
     st.write("Fetching items from the dataset...")
@@ -228,13 +232,16 @@ if st.session_state.apify_status == 'SUCCEEDED':
         except Exception as e:
             st.error(f"Error processing video: {gcs_url} - {e}")
 
-    output_df = pd.DataFrame(list_of_dicts)
-    output_df.to_csv(f"{st.session_state.country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
+    # Store final results in session state
+    st.session_state.final_results = pd.DataFrame(list_of_dicts)
+    st.session_state.final_results.to_csv(f"{st.session_state.country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
+    st.session_state.processing_complete = True
     
     overall_progress.progress(100, text="All videos processed successfully!")
     st.success("Processing complete! Check the generated CSV file for GIF URLs.")
 
-    # Add download button for the CSV file
+# Show download button if processing is complete
+if st.session_state.processing_complete and st.session_state.final_results is not None:
     with open(f"{st.session_state.country_name}_trend_gifs.csv", "rb") as file:
         st.download_button(
             label="Download CSV File",
@@ -250,3 +257,5 @@ elif st.session_state.apify_status == 'FAILED':
     st.session_state.apify_status = None
     st.session_state.run_id = None
     st.session_state.dataset_id = None
+    st.session_state.processing_complete = False
+    st.session_state.final_results = None
