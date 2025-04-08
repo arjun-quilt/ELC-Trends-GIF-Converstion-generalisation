@@ -13,22 +13,6 @@ import shutil
 import requests
 import time
 
-# Initialize session state
-if 'apify_status' not in st.session_state:
-    st.session_state.apify_status = None
-if 'run_id' not in st.session_state:
-    st.session_state.run_id = None
-if 'dataset_id' not in st.session_state:
-    st.session_state.dataset_id = None
-if 'input_list_of_dicts' not in st.session_state:
-    st.session_state.input_list_of_dicts = None
-if 'country_name' not in st.session_state:
-    st.session_state.country_name = None
-if 'final_results' not in st.session_state:
-    st.session_state.final_results = None
-if 'processing_complete' not in st.session_state:
-    st.session_state.processing_complete = False
-
 # Extract the secret and create temporary credentials file
 gcp_secret = st.secrets["gcp_secret"]
 with tempfile.NamedTemporaryFile(delete=False, mode="w") as temp_file:
@@ -104,19 +88,15 @@ def check_run_status(run_id: str, api_token: str, status_placeholder) -> bool:
                 
                 if status == 'SUCCEEDED':
                     status_placeholder.success(f"Run {run_id}: SUCCEEDED")
-                    st.session_state.apify_status = 'SUCCEEDED'
                     return True
                 elif status == 'FAILED':
                     status_placeholder.error(f"Run {run_id}: FAILED")
-                    st.session_state.apify_status = 'FAILED'
                     return False
                 elif status == 'RUNNING':
-                    status_placeholder.info(f"Run {run_id}: Still running...")
-                    st.session_state.apify_status = 'RUNNING'
+                    status_placeholder.info(f"Run {run_id}: Still running... (Last checked: {time.strftime('%H:%M:%S')})")
                     time.sleep(5)
                 else:
                     status_placeholder.warning(f"Run {run_id}: Unknown status - {status}")
-                    st.session_state.apify_status = 'UNKNOWN'
                     return False
             else:
                 raise Exception(f"HTTP {response.status_code}")
@@ -133,9 +113,7 @@ country_name = st.text_input("Enter the country name (sheet name)")
 
 if st.button("Process"):
     if uploaded_file and country_name:
-        # Store data in session state
-        st.session_state.country_name = country_name
-        st.session_state.input_list_of_dicts = pd.read_excel(uploaded_file, sheet_name=country_name).to_dict(orient="records")
+        input_list_of_dicts = pd.read_excel(uploaded_file, sheet_name=country_name).to_dict(orient="records")
 
         input_params = {
             "disableCheerioBoost": False,
@@ -147,125 +125,97 @@ if st.button("Process"):
             "shouldDownloadVideos": True,
             "maxProfilesPerQuery": 10,
             "tiktokMemoryMb": "default",
-            "postURLs": [row["Links"] for row in st.session_state.input_list_of_dicts],
+            "postURLs": [row["Links"] for row in input_list_of_dicts],
         }
 
         st.write("Running the Apify actor task...")
         response = asyncio.run(run_actor_task(input_params))
-        st.session_state.run_id = response.json()["data"]["id"]
-        st.session_state.dataset_id = response.json()["data"]["defaultDatasetId"]
+        run_id = response.json()["data"]["id"]
+        dataset_id = response.json()["data"]["defaultDatasetId"]
         
         # Create a placeholder for status updates
         status_placeholder = st.empty()
         
         # Check run status
         api_token = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
-        check_run_status(st.session_state.run_id, api_token, status_placeholder)
+        if check_run_status(run_id, api_token, status_placeholder):
+            st.write("Apify task completed successfully. Starting GIF conversion...")
+            
+            st.write("Fetching items from the dataset...")
+            dataset = asyncio.run(get_items(dataset_id))
+            st.write(f"Fetched {len(dataset)} items from the dataset.")
 
-# If we have a running Apify task, show its status
-if st.session_state.apify_status == 'RUNNING':
-    status_placeholder = st.empty()
-    check_run_status(st.session_state.run_id, "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk", status_placeholder)
+            all_items_dict = {}
+            for raw_row in dataset:
+                try:
+                    original_url = raw_row["submittedVideoUrl"]
+                    all_items_dict[original_url] = {
+                        "Gcs Url": raw_row["gcsMediaUrls"][0]
+                    }
+                except Exception as e:
+                    st.error(f"Error processing row: {raw_row} - {e}")
 
-# If Apify task succeeded, proceed with GIF conversion
-if st.session_state.apify_status == 'SUCCEEDED' and not st.session_state.processing_complete:
-    try:
-        st.write("Apify task completed successfully. Starting GIF conversion...")
-        
-        st.write("Fetching items from the dataset...")
-        dataset = asyncio.run(get_items(st.session_state.dataset_id))
-        st.write(f"Fetched {len(dataset)} items from the dataset.")
+            for input_dict in input_list_of_dicts:
+                clean_url = input_dict["Links"]
+                video_id = clean_url.split("?")[0].split("/")[-1]
+                input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
 
-        all_items_dict = {}
-        for raw_row in dataset:
-            try:
-                original_url = raw_row["submittedVideoUrl"]
-                all_items_dict[original_url] = {
-                    "Gcs Url": raw_row["gcsMediaUrls"][0]
-                }
-            except Exception as e:
-                st.error(f"Error processing row: {raw_row} - {e}")
+            output_df = pd.DataFrame(input_list_of_dicts)
+            output_df.to_csv(f"{country_name}_duration.csv", index=False, encoding="utf_8_sig")
+            st.write(f"Generated CSV file: {country_name}_duration.csv")
 
-        for input_dict in st.session_state.input_list_of_dicts:
-            clean_url = input_dict["Links"]
-            video_id = clean_url.split("?")[0].split("/")[-1]
-            input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
+            # Download videos and convert to GIFs
+            df = pd.read_csv(f"{country_name}_duration.csv")
+            list_of_dicts = df.to_dict(orient="records")
 
-        output_df = pd.DataFrame(st.session_state.input_list_of_dicts)
-        output_df.to_csv(f"{st.session_state.country_name}_duration.csv", index=False, encoding="utf_8_sig")
-        st.write(f"Generated CSV file: {st.session_state.country_name}_duration.csv")
+            # Initialize overall progress bar
+            total_videos = len(list_of_dicts)
+            overall_progress = st.progress(0, text=f"Processing {total_videos} videos...")
+            
+            for index, raw_row in enumerate(list_of_dicts, 1):
+                gcs_url = raw_row["Gcs Url"]
+                try:
+                    video_id = gcs_url.split("/")[-1].split(".")[0]
+                    
+                    # Create a temporary file for the video
+                    temp_video_path = f"{video_id}.mp4"
+                    urllib.request.urlretrieve(gcs_url, temp_video_path)
+                    
+                    gif_path = convert_to_gif(temp_video_path, video_id)
+                    
+                    # Upload GIF to GCS
+                    bucket_name = "tiktok-actor-content"
+                    gcs_folder = "gifs_20240419"
+                    
+                    gif_url = upload_gif_to_gcs(gif_path, video_id, bucket_name, gcs_folder)
+                    
+                    # Clean up temporary files
+                    os.unlink(temp_video_path)
+                    os.unlink(gif_path)
+                    
+                    raw_row["GIF"] = gif_url
+                    
+                    # Update overall progress
+                    progress_percent = int((index / total_videos) * 100)
+                    overall_progress.progress(progress_percent, text=f"Processed {index}/{total_videos} videos")
+                    
+                except Exception as e:
+                    st.error(f"Error processing video: {gcs_url} - {e}")
 
-        # Download videos and convert to GIFs
-        df = pd.read_csv(f"{st.session_state.country_name}_duration.csv")
-        list_of_dicts = df.to_dict(orient="records")
+            # Store final results
+            final_results = pd.DataFrame(list_of_dicts)
+            final_results.to_csv(f"{country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
+            
+            overall_progress.progress(100, text="All videos processed successfully!")
+            st.success("Processing complete! Check the generated CSV file for GIF URLs.")
 
-        # Initialize overall progress bar
-        total_videos = len(list_of_dicts)
-        overall_progress = st.progress(0, text=f"Processing {total_videos} videos...")
-
-        # Process each video
-        for i, row in enumerate(list_of_dicts):
-            try:
-                # Update progress
-                progress_percent = (i + 1) / total_videos
-                overall_progress.progress(progress_percent, text=f"Processing video {i + 1}/{total_videos}...")
-
-                # Download video
-                video_url = row["Gcs Url"]
-                video_path = f"temp_video_{i}.mp4"
-                urllib.request.urlretrieve(video_url, video_path)
-
-                # Convert to GIF
-                clip = VideoFileClip(video_path)
-                gif_path = f"output_{i}.gif"
-                clip.write_gif(gif_path, fps=10)
-
-                # Upload to GCS
-                bucket_name = "tiktok-actor-content"
-                gcs_path = f"{st.session_state.country_name}_gifs/{os.path.basename(gif_path)}"
-                upload_gif_to_gcs(gif_path, video_id, bucket_name, gcs_path)
-
-                # Update row with GIF URL
-                row["Gif Url"] = f"https://storage.googleapis.com/{bucket_name}/{gcs_path}"
-
-                # Clean up temporary files
-                os.remove(video_path)
-                os.remove(gif_path)
-
-            except Exception as e:
-                st.error(f"Error processing video {i + 1}: {str(e)}")
-                continue
-
-        # Store final results in session state
-        st.session_state.final_results = pd.DataFrame(list_of_dicts)
-        st.session_state.final_results.to_csv(f"{st.session_state.country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
-        st.session_state.processing_complete = True
-        
-        overall_progress.progress(100, text="All videos processed successfully!")
-        st.success("Processing complete!")
-
-    except Exception as e:
-        st.error(f"Error during GIF conversion: {str(e)}")
-        # Reset session state on error
-        st.session_state.processing_complete = False
-        st.session_state.final_results = None
-
-# Show download button if processing is complete
-if st.session_state.processing_complete and st.session_state.final_results is not None:
-    with open(f"{st.session_state.country_name}_trend_gifs.csv", "rb") as file:
-        st.download_button(
-            label="Download CSV File",
-            data=file,
-            file_name=f"{st.session_state.country_name}_trend_gifs.csv",
-            mime="text/csv"
-        )
-
-# If Apify task failed, show error
-elif st.session_state.apify_status == 'FAILED':
-    st.error("Apify task failed. Please try again.")
-    # Reset session state
-    st.session_state.apify_status = None
-    st.session_state.run_id = None
-    st.session_state.dataset_id = None
-    st.session_state.processing_complete = False
-    st.session_state.final_results = None
+            # Show download button
+            with open(f"{country_name}_trend_gifs.csv", "rb") as file:
+                st.download_button(
+                    label="Download CSV File",
+                    data=file,
+                    file_name=f"{country_name}_trend_gifs.csv",
+                    mime="text/csv"
+                )
+        else:
+            st.error("Apify task failed. Please try again.")
