@@ -29,11 +29,11 @@ if 'current_batch' not in st.session_state:
     st.session_state.current_batch = 0
 
 def reset_application():
-    """Thoroughly reset the application state and terminate"""
+    """Thoroughly reset the application state and perform cleanup"""
     try:
         # Show cleanup status
         status = st.empty()
-        status.info("Cleaning up and terminating application...")
+        status.info("Cleaning up application state...")
         
         # Clear all session state
         for key in list(st.session_state.keys()):
@@ -67,15 +67,13 @@ def reset_application():
         gc.collect()
         
         # Show final message
-        status.success("Processing complete! You can close this window.")
-        time.sleep(2)
-        
-        # Terminate the application
-        os._exit(0)
+        status.success("Cleanup complete! You can continue using the application.")
         
     except Exception as e:
-        st.error(f"Error during termination: {str(e)}")
-        os._exit(1)
+        st.error(f"Error during cleanup: {str(e)}")
+        # Log the error for debugging
+        print(f"Error during reset_application: {str(e)}")
+        
 # Add reset button at the top
 col1, col2 = st.columns([3, 1])
 with col1:
