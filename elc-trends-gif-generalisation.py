@@ -14,7 +14,75 @@ import requests
 import time
 from typing import List
 import yt_dlp
-import io
+import sys
+import os
+import gc
+import time
+import tempfile
+
+# Initialize session state
+if 'processing' not in st.session_state:
+    st.session_state.processing = False
+if 'processed_urls' not in st.session_state:
+    st.session_state.processed_urls = {}
+if 'current_batch' not in st.session_state:
+    st.session_state.current_batch = 0
+
+def reset_application():
+    """Thoroughly reset the application state and terminate"""
+    try:
+        # Show cleanup status
+        status = st.empty()
+        status.info("Cleaning up and terminating application...")
+        
+        # Clear all session state
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        
+        # Clear all cached functions
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        
+        # Clear any temporary files
+        try:
+            for file in os.listdir('.'):
+                if file.endswith(('.mp4', '.gif', '.csv')):
+                    try:
+                        os.remove(file)
+                        print(f"Removed temporary file: {file}")
+                    except Exception as e:
+                        print(f"Could not remove temporary file {file}: {str(e)}")
+        except Exception as e:
+            print(f"Error cleaning temporary files: {str(e)}")
+        
+        # Remove credentials file if it exists
+        if 'temp_file_path' in globals() and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+                print("Removed credentials file")
+            except Exception as e:
+                print(f"Could not remove credentials file: {str(e)}")
+        
+        # Force garbage collection
+        gc.collect()
+        
+        # Show final message
+        status.success("Processing complete! You can close this window.")
+        time.sleep(2)
+        
+        # Terminate the application
+        os._exit(0)
+        
+    except Exception as e:
+        st.error(f"Error during termination: {str(e)}")
+        os._exit(1)
+# Add reset button at the top
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.title("TikTok Video to GIF Converter")
+with col2:
+    if st.button("Reset Application", key="reset_button"):
+        reset_application()
 
 # Extract the secret and create temporary credentials file
 gcp_secret = st.secrets["gcp_secret"]
@@ -248,13 +316,16 @@ def yt_shorts_downloader(urls, bucket_name):
     return processed_urls
 
 # Streamlit UI
-st.title("TikTok Video to GIF Converter")
-
 uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"])
 country_name = st.text_input("Enter the country name (sheet name)")
 
 if st.button("Process"):
     if uploaded_file and country_name:
+        # Reset processing state
+        st.session_state.processing = True
+        st.session_state.processed_urls = {}
+        st.session_state.current_batch = 0
+        
         input_list_of_dicts = pd.read_excel(uploaded_file, sheet_name=country_name).to_dict(orient="records")
         
         # Separate URLs by type
@@ -263,6 +334,8 @@ if st.button("Process"):
         youtube_urls = []
         for row in input_list_of_dicts:
             url = row["Links"]
+            if pd.isna(url) or not url:
+                continue
             if "tiktok.com" in url:
                 tiktok_urls.append(url)
             elif "storage.googleapis.com" in url:
@@ -270,12 +343,16 @@ if st.button("Process"):
             elif "youtube.com/shorts" in url or "youtu.be" in url:
                 youtube_urls.append(url)
         
+        # Debug information
+        st.write(f"Found {len(tiktok_urls)} TikTok URLs, {len(youtube_urls)} YouTube URLs, and {len(gcs_urls)} GCS URLs")
+        
         # Process TikTok videos if any
         if tiktok_urls:
             st.write(f"Processing {len(tiktok_urls)} TikTok videos...")
             success, dataset_ids = asyncio.run(process_tiktok_videos(tiktok_urls))
             if not success:
                 st.error("Apify task failed. Please try again.")
+                st.session_state.processing = False
                 st.stop()
                 
             st.write("All TikTok videos processed successfully. Fetching dataset items...")
@@ -283,7 +360,7 @@ if st.button("Process"):
             # Fetch items from all datasets
             all_items = []
             for dataset_id in dataset_ids:
-                st.write(f"Fetching items from dataset {dataset_id}...")
+                # st.write(f"Fetching items from dataset {dataset_id}...")
                 dataset = asyncio.run(get_items(dataset_id))
                 all_items.extend(dataset)
             
@@ -344,7 +421,6 @@ if st.button("Process"):
             try:
                 # Skip if GCS URL is NaN or empty
                 if pd.isna(gcs_url) or not gcs_url:
-                    # st.warning(f"Skipping row {index} - No valid GCS URL found")
                     continue
 
                 video_id = gcs_url.split("/")[-1].split(".")[0]
@@ -372,7 +448,6 @@ if st.button("Process"):
                 overall_progress.progress(progress_percent, text=f"Processed {index}/{total_videos} videos")
                 
             except Exception as e:
-                # st.error(f"Error processing video: {gcs_url} - {e}")
                 # Clean up temporary files if they exist
                 if 'temp_video_path' in locals() and os.path.exists(temp_video_path):
                     os.unlink(temp_video_path)
@@ -386,6 +461,26 @@ if st.button("Process"):
         overall_progress.progress(100, text="All videos processed successfully!")
         st.success("Processing complete! Check the generated CSV file for GIF URLs.")
 
+        # Display sample results and statistics
+        st.write("\n📊 Sample of Processed Results:")
+        st.write("Here are the first 3 rows of your processed data:")
+        
+        # Create a sample dataframe with just the important columns
+        sample_df = final_results[['Links', 'Gcs Url', 'GIF']].head(3)
+        
+        # Display the sample
+        st.dataframe(sample_df)
+        
+        # Show processing statistics
+        st.write("\n📈 Processing Statistics:")
+        total_rows = len(final_results)
+        rows_with_gcs = sum(final_results['Gcs Url'].notna())
+        rows_with_gif = sum(final_results['GIF'].notna())
+        
+        st.write(f"Total rows processed: {total_rows}")
+        st.write(f"Rows with GCS URLs: {rows_with_gcs} ({(rows_with_gcs/total_rows)*100:.1f}%)")
+        st.write(f"Rows with GIF URLs: {rows_with_gif} ({(rows_with_gif/total_rows)*100:.1f}%)")
+
         # Show download button
         with open(f"{country_name}_trend_gifs.csv", "rb") as file:
             st.download_button(
@@ -394,3 +489,6 @@ if st.button("Process"):
                 file_name=f"{country_name}_trend_gifs.csv",
                 mime="text/csv"
             )
+        
+        # Reset processing state
+        st.session_state.processing = False
