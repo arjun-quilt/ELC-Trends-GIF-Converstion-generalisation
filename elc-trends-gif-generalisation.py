@@ -187,10 +187,10 @@ def yt_shorts_downloader(urls, bucket_name):
 
         # Set options for yt-dlp
         ydl_opts = {
-            'format': 'mp4',  # Specify MP4 format
-            'outtmpl': '%(id)s.%(ext)s',   # Output filename pattern
-            'quiet': True,    # Suppress yt-dlp's output
-            'socket_timeout': 30,  # Increase socket timeout
+            'format': 'mp4',
+            'outtmpl': '%(id)s.%(ext)s',  # Save as <video_id>.mp4
+            'quiet': False,
+            'socket_timeout': 30,
         }
 
         for retry in range(max_retries):
