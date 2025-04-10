@@ -19,6 +19,9 @@ import os
 import gc
 import time
 import tempfile
+import re
+from playwright.async_api import async_playwright
+import nest_asyncio
 
 # Initialize session state
 if 'processing' not in st.session_state:
@@ -313,6 +316,73 @@ def yt_shorts_downloader(urls, bucket_name):
     status_text.text(f"Completed processing {total_shorts} YouTube Shorts")
     return processed_urls
 
+# Apply nested event loop fix for Jupyter/Colab
+nest_asyncio.apply()
+@st.cache_data
+def extract_and_download_douyin_video(video_page_url):
+    async def _async_extract_and_download():
+        match = re.search(r'/video/(\d+)', video_page_url)
+        if not match:
+            print("[ERROR] Unable to extract video ID from URL.")
+            return None
+        video_id = match.group(1)
+        filename = f"{video_id}.mp4"
+
+        print("[INFO] Starting Playwright session...")
+        async with async_playwright() as p:
+            print("[INFO] Launching browser...")
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+
+            video_url = None
+
+            async def intercept_response(response):
+                nonlocal video_url
+                url = response.url
+                if "video" in url and (url.endswith(".mp4") or "mime_type=video_mp4" in url):
+                    print(f"[INFO] Found video URL: {url}")
+                    video_url = url
+
+            page.on("response", intercept_response)
+
+            print(f"[INFO] Navigating to {video_page_url}...")
+            await page.goto(video_page_url, timeout=60000)
+
+            print("[INFO] Waiting for video element to appear...")
+            try:
+                await page.wait_for_selector("video", timeout=15000)
+            except Exception as e:
+                print(f"[WARNING] Video element not found: {e}")
+
+            print("[INFO] Waiting for network requests to be captured...")
+            await page.wait_for_timeout(5000)
+            await browser.close()
+
+            if video_url:
+                print(f"[SUCCESS] Extracted video URL: {video_url}")
+                print(f"[INFO] Downloading video from {video_url}...")
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+                    "Referer": "https://www.douyin.com/",
+                    "Range": "bytes=0-"
+                }
+                response = requests.get(video_url, headers=headers, stream=True)
+                if response.status_code in [200, 206]:
+                    print("[INFO] Saving video to file...")
+                    with open(filename, "wb") as file:
+                        for chunk in response.iter_content(chunk_size=1024):
+                            file.write(chunk)
+                    print(f"[SUCCESS] Video downloaded successfully as {filename}")
+                    return filename  # Return the filename for further processing
+                else:
+                    print(f"[ERROR] Failed to download video. Status Code: {response.status_code}")
+            else:
+                print("[ERROR] Failed to extract video URL.")
+            return None
+
+    # Run async logic in already-running event loop
+    return asyncio.get_event_loop().run_until_complete(_async_extract_and_download())
+
 # Streamlit UI
 uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"])
 country_name = st.text_input("Enter the country name (sheet name)")
@@ -330,6 +400,7 @@ if st.button("Process"):
         tiktok_urls = []
         gcs_urls = []
         youtube_urls = []
+        douyin_urls = []
         for row in input_list_of_dicts:
             url = row["Links"]
             if pd.isna(url) or not url:
@@ -340,9 +411,11 @@ if st.button("Process"):
                 gcs_urls.append(url)
             elif "youtube.com/shorts" in url or "youtu.be" in url:
                 youtube_urls.append(url)
+            elif "douyin.com" in url:
+                douyin_urls.append(url)
         
         # Debug information
-        st.write(f"Found {len(tiktok_urls)} TikTok URLs, {len(youtube_urls)} YouTube URLs, and {len(gcs_urls)} GCS URLs")
+        st.write(f"Found {len(tiktok_urls)} TikTok URLs, {len(youtube_urls)} YouTube URLs, {len(gcs_urls)} GCS URLs, and {len(douyin_urls)} Douyin URLs")
         
         # Process TikTok videos if any
         if tiktok_urls:
@@ -373,7 +446,8 @@ if st.button("Process"):
                         "Gcs Url": raw_row["gcsMediaUrls"][0]
                     }
                 except Exception as e:
-                    st.error(f"Error processing row: {raw_row} - {e}")
+                    # st.error(f"Error processing row: {raw_row} - {e}")
+                    print(e)
 
             # Update GCS URLs for TikTok videos
             for input_dict in input_list_of_dicts:
@@ -400,6 +474,43 @@ if st.button("Process"):
             for input_dict in input_list_of_dicts:
                 if "storage.googleapis.com" in input_dict["Links"]:
                     input_dict["Gcs Url"] = input_dict["Links"]
+
+        # Process Douyin videos if any
+        if douyin_urls:
+            st.write(f"Processing {len(douyin_urls)} Douyin videos...")
+            processed_douyin_urls = {}
+            bucket_name = "tiktok-actor-content"
+            client = get_storage_client()  # Get the storage client
+            bucket = client.bucket(bucket_name)
+
+            # Create a progress bar for Douyin videos
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            for idx, url in enumerate(douyin_urls):
+                video_file = extract_and_download_douyin_video(url)
+                if video_file:
+                    # Upload to GCS
+                    destination_blob = f"{os.path.basename(video_file)}"
+                    blob = bucket.blob(destination_blob)
+                    with open(video_file, 'rb') as file:
+                        blob.upload_from_file(file, content_type="video/mp4")
+                    gcs_url = f"https://storage.googleapis.com/{bucket_name}/{destination_blob}"
+                    processed_douyin_urls[url] = gcs_url
+                    os.unlink(video_file)  # Clean up the temporary file
+                else:
+                    processed_douyin_urls[url] = None
+
+                # Update progress bar
+                progress = (idx + 1) / len(douyin_urls)
+                progress_bar.progress(progress)
+                status_text.text(f"Processed {idx + 1}/{len(douyin_urls)} Douyin videos.")
+
+            # Update GCS URLs for Douyin videos
+            for input_dict in input_list_of_dicts:
+                if "douyin.com" in input_dict["Links"]:
+                    if processed_douyin_urls.get(input_dict["Links"]):
+                        input_dict["Gcs Url"] = processed_douyin_urls[input_dict["Links"]]
 
         # Save intermediate results
         output_df = pd.DataFrame(input_list_of_dicts)
