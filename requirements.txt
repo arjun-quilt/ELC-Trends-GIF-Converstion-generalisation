@@ -13,3 +13,4 @@ asyncio
 psutil
 httpx
 playwright
+nest-asyncio
