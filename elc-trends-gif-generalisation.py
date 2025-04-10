@@ -24,7 +24,7 @@ from playwright.async_api import async_playwright
 import nest_asyncio
 import subprocess
 # Run the Playwright install command
-subprocess.run(["playwright", "install"], check=True)
+subprocess.run(["sudo", "playwright", "install-deps"], check=True)
 
 # Initialize session state
 if 'processing' not in st.session_state:
