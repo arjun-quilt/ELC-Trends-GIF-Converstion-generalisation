@@ -14,4 +14,4 @@ psutil
 httpx
 playwright
 nest-asyncio
-subprocess
+subprocess.run
