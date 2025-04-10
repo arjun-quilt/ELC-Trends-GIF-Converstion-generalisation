@@ -23,8 +23,23 @@ import re
 from playwright.async_api import async_playwright
 import nest_asyncio
 import subprocess
+
+# Install system dependencies
+try:
+    subprocess.run([
+        "sudo", "apt-get", "install", "-y",
+        "libnss3", "libnspr4", "libatk1.0-0", "libatk-bridge2.0-0", "libatspi2.0-0",
+        "libxcomposite1", "libxdamage1", "libxfixes3", "libxrandr2",
+        "libgbm1", "libxkbcommon0", "libasound2"
+    ], check=True)
+except Exception as e:
+    print(f"Error installing system dependencies: {e}")
+
 # Run the Playwright install command
-subprocess.run(["playwright", "install"], check=True)
+try:
+    subprocess.run(["playwright", "install"], check=True)
+except Exception as e:
+    print(f"Error installing Playwright browsers: {e}")
 
 # Initialize session state
 if 'processing' not in st.session_state:
