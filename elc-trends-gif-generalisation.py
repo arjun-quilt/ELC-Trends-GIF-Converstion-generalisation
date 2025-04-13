@@ -17,6 +17,7 @@ import re
 from playwright.async_api import async_playwright
 import nest_asyncio
 import subprocess
+import openpyxl
 
 # Install system dependencies
 try:
