@@ -280,6 +280,8 @@ def yt_shorts_downloader(urls, bucket_name):
             'outtmpl': '%(id)s.%(ext)s',  # Save as <video_id>.mp4
             'quiet': False,
             'socket_timeout': 30,
+            'headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+
         }
 
         for retry in range(max_retries):
