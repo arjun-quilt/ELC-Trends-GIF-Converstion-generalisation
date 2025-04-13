@@ -31,3 +31,5 @@ libmanette-0.2-0
 libegl1-mesa
 libgl1-mesa-glx
 libgles2-mesa
+ffmpeg
+phantomjs
