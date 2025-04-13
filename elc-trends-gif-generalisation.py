@@ -21,7 +21,7 @@ import openpyxl
 
 # Install system dependencies
 try:
-    subprocess.run(["playwright", "install"], check=True)
+    subprocess.run(["playwright", "install", "chromium"], check=True)
 except Exception as e:
     print(f"Error installing Playwright browsers: {e}")
 

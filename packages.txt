@@ -32,3 +32,8 @@ libegl1-mesa
 libgl1-mesa-glx
 libgles2-mesa
 ffmpeg
+libwoff1
+libwebpdemux2
+libxss1
+libdbus-1-3
+libgdk-pixbuf2.0-0
