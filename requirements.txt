@@ -3,14 +3,8 @@ moviepy==1.0.3
 requests
 pandas
 streamlit==1.37.0
-openpyxl
 google-cloud-storage
-ffmpeg-python
-imageio
-imageio-ffmpeg
-aiohttp
 asyncio
-psutil
 httpx
 playwright
 nest-asyncio

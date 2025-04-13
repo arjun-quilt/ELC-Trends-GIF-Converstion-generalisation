@@ -7,25 +7,18 @@ from moviepy.editor import VideoFileClip
 import httpx
 import asyncio
 from google.cloud import storage
-import json
 import tempfile
-import shutil
 import requests
 import time
 from typing import List
 import yt_dlp
-import sys
-import os
 import gc
-import time
-import tempfile
 import re
 from playwright.async_api import async_playwright
 import nest_asyncio
 import subprocess
 
 # Install system dependencies
-# Run the Playwright install command
 try:
     subprocess.run(["playwright", "install"], check=True)
 except Exception as e:
@@ -90,6 +83,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("TikTok Video to GIF Converter")
 with col2:
+    st.write("Reset befor and after run is completed")
     if st.button("Reset Application", key="reset_button"):
         reset_application()
 
@@ -133,6 +127,7 @@ def convert_to_gif(media_file, video_id, max_duration=2, fps=3):
         clip.write_gif(temp_gif_path)
     return temp_gif_path
 
+
 @st.cache_data
 def upload_gif_to_gcs(local_file_path: str, video_id: str, bucket_name: str, gcs_folder: str):
     client = get_storage_client()
@@ -174,6 +169,7 @@ async def check_run_status(run_id: str, api_token: str, status_placeholder) -> b
             status_placeholder.warning(f"Run {run_id}: Request failed - {str(e)}")
             await asyncio.sleep(retry_delay)
 
+@st.cache_resource
 async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
     """Process all TikTok videos in parallel batches"""
     if not tiktok_videos:
@@ -230,6 +226,21 @@ async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
         except Exception as e:
             st.error(f"Error during batch processing: {str(e)}")
             return False, None
+
+@st.cache_resource
+def upload_video_to_gcs(video_file: str, bucket_name: str) -> str:
+    """Uploads a video file to Google Cloud Storage and returns the GCS URL."""
+    bucket_name = "tiktok-actor-content"
+    client = get_storage_client()  # Get the storage client
+    bucket = client.bucket(bucket_name)
+    destination_blob = os.path.basename(video_file)  # Use the filename as the blob name
+    blob = bucket.blob(destination_blob)
+
+    with open(video_file, 'rb') as file:
+        blob.upload_from_file(file, content_type="video/mp4")
+    
+    gcs_url = f"https://storage.googleapis.com/{bucket_name}/{destination_blob}"
+    return gcs_url
 
 @st.cache_data
 def yt_shorts_downloader(urls, bucket_name):
@@ -290,20 +301,14 @@ def yt_shorts_downloader(urls, bucket_name):
                 if file_size == 0:
                     raise Exception("Downloaded file is empty")
                 
-                # Upload to GCS
-                destination_blob = f"{video_id}.mp4"
-                blob = bucket.blob(destination_blob)
-                
-                # Upload the file
-                with open(temp_file, 'rb') as file:
-                    blob.upload_from_file(file, content_type="video/mp4")
+                # Upload to GCS using the new function
+                gcs_url = upload_video_to_gcs(temp_file, bucket_name)
+                processed_urls[url] = str(gcs_url)
                 
                 # Clean up temporary file
                 if os.path.exists(temp_file):
                     os.unlink(temp_file)
                 
-                gcs_url = f"https://storage.googleapis.com/{bucket_name}/{destination_blob}"
-                processed_urls[url] = gcs_url
                 break  # Success, break the retry loop
                 
             except Exception as e:
@@ -354,7 +359,7 @@ def extract_and_download_douyin_video(video_page_url):
             page.on("response", intercept_response)
 
             print(f"[INFO] Navigating to {video_page_url}...")
-            await page.goto(video_page_url, timeout=60000)
+            await page.goto(video_page_url, timeout=120000)
 
             print("[INFO] Waiting for video element to appear...")
             try:
@@ -393,7 +398,7 @@ def extract_and_download_douyin_video(video_page_url):
 
 # Streamlit UI
 uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"])
-country_name = st.text_input("Enter the country name (sheet name)")
+country_name = st.text_input("Enter the Sheet Name")
 
 if st.button("Process"):
     if uploaded_file and country_name:
@@ -402,25 +407,31 @@ if st.button("Process"):
         st.session_state.processed_urls = {}
         st.session_state.current_batch = 0
         
+        # Create a copy of the DataFrame and drop rows with NaN in the 'Links' column
         input_list_of_dicts = pd.read_excel(uploaded_file, sheet_name=country_name).to_dict(orient="records")
-        
+        cleaned_input_list = input_list_of_dicts.copy()
+
+        # Initialize Gcs Url and GIF fields to None
+        for input_dict in cleaned_input_list:
+            input_dict["Gcs Url"] = None
+            input_dict["GIF"] = None
+
         # Separate URLs by type
         tiktok_urls = []
         gcs_urls = []
         youtube_urls = []
         douyin_urls = []
-        for row in input_list_of_dicts:
-            url = row["Links"]
-            if pd.isna(url) or not url:
-                continue
-            if "tiktok.com" in url:
-                tiktok_urls.append(url)
-            elif "storage.googleapis.com" in url:
-                gcs_urls.append(url)
-            elif "youtube.com/shorts" in url or "youtu.be" in url:
-                youtube_urls.append(url)
-            elif "douyin.com" in url:
-                douyin_urls.append(url)
+        for input_dict in cleaned_input_list:
+            url = input_dict["Links"]
+            if isinstance(url, str) and url.strip():  # Ensure it's a string and not empty
+                if "tiktok.com" in url:
+                    tiktok_urls.append(url)
+                elif "storage.googleapis.com" in url:
+                    gcs_urls.append(url)
+                elif "youtube.com/shorts" in url or "youtu.be" in url:
+                    youtube_urls.append(url)
+                elif "douyin.com" in url:
+                    douyin_urls.append(url)
         
         # Debug information
         st.write(f"Found {len(tiktok_urls)} TikTok URLs, {len(youtube_urls)} YouTube URLs, {len(gcs_urls)} GCS URLs, and {len(douyin_urls)} Douyin URLs")
@@ -458,8 +469,8 @@ if st.button("Process"):
                     print(e)
 
             # Update GCS URLs for TikTok videos
-            for input_dict in input_list_of_dicts:
-                if "tiktok.com" in input_dict["Links"]:
+            for input_dict in cleaned_input_list:
+                if isinstance(input_dict["Links"], str) and "tiktok.com" in input_dict["Links"]:
                     clean_url = input_dict["Links"]
                     video_id = clean_url.split("?")[0].split("/")[-1]
                     input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
@@ -471,16 +482,17 @@ if st.button("Process"):
             processed_urls = yt_shorts_downloader(youtube_urls, bucket_name)
             
             # Update GCS URLs for YouTube videos
-            for input_dict in input_list_of_dicts:
-                if "youtube.com/shorts" in input_dict["Links"] or "youtu.be" in input_dict["Links"]:
+            for input_dict in cleaned_input_list:
+                if isinstance(input_dict["Links"], str) and ("youtube.com/shorts" in input_dict["Links"] or "youtu.be" in input_dict["Links"]):
                     if processed_urls.get(input_dict["Links"]):
                         input_dict["Gcs Url"] = processed_urls[input_dict["Links"]]
         
         # Process GCS videos if any
         if gcs_urls:
             st.write(f"Processing {len(gcs_urls)} GCS videos...")
-            for input_dict in input_list_of_dicts:
-                if "storage.googleapis.com" in input_dict["Links"]:
+            for input_dict in cleaned_input_list:
+                if isinstance(input_dict["Links"],str) and ("storage.googleapis.com" in input_dict["Links"]):
+                # if "storage.googleapis.com" in input_dict["Links"]:
                     input_dict["Gcs Url"] = input_dict["Links"]
 
         # Process Douyin videos if any
@@ -488,26 +500,26 @@ if st.button("Process"):
             st.write(f"Processing {len(douyin_urls)} Douyin videos...")
             processed_douyin_urls = {}
             bucket_name = "tiktok-actor-content"
-            client = get_storage_client()  # Get the storage client
-            bucket = client.bucket(bucket_name)
 
             # Create a progress bar for Douyin videos
             progress_bar = st.progress(0)
             status_text = st.empty()
 
             for idx, url in enumerate(douyin_urls):
-                video_file = extract_and_download_douyin_video(url)
-                if video_file:
-                    # Upload to GCS
-                    destination_blob = f"{os.path.basename(video_file)}"
-                    blob = bucket.blob(destination_blob)
-                    with open(video_file, 'rb') as file:
-                        blob.upload_from_file(file, content_type="video/mp4")
-                    gcs_url = f"https://storage.googleapis.com/{bucket_name}/{destination_blob}"
-                    processed_douyin_urls[url] = gcs_url
-                    os.unlink(video_file)  # Clean up the temporary file
-                else:
-                    processed_douyin_urls[url] = None
+                try:
+                    video_file = extract_and_download_douyin_video(url)
+                    if video_file:
+                        # Upload to GCS using the new function
+                        gcs_url = upload_video_to_gcs(video_file, bucket_name)
+                        processed_douyin_urls[url] = gcs_url
+                        os.unlink(video_file)  # Clean up the temporary file
+                    else:
+                        processed_douyin_urls[url] = None
+
+                except Exception as e:
+                    # Log the error and skip to the next URL
+                    st.warning(f"Failed to process Douyin video from URL: {url}. Error: {str(e)}")
+                    processed_douyin_urls[url] = None  # Mark as None for tracking
 
                 # Update progress bar
                 progress = (idx + 1) / len(douyin_urls)
@@ -515,13 +527,13 @@ if st.button("Process"):
                 status_text.text(f"Processed {idx + 1}/{len(douyin_urls)} Douyin videos.")
 
             # Update GCS URLs for Douyin videos
-            for input_dict in input_list_of_dicts:
-                if "douyin.com" in input_dict["Links"]:
+            for input_dict in cleaned_input_list:
+                if isinstance(input_dict["Links"], str) and "douyin.com" in input_dict["Links"]:
                     if processed_douyin_urls.get(input_dict["Links"]):
                         input_dict["Gcs Url"] = processed_douyin_urls[input_dict["Links"]]
 
         # Save intermediate results
-        output_df = pd.DataFrame(input_list_of_dicts)
+        output_df = pd.DataFrame(cleaned_input_list)
         output_df.to_csv(f"{country_name}_duration.csv", index=False, encoding="utf_8_sig")
         st.write(f"Generated CSV file: {country_name}_duration.csv")
 
@@ -533,43 +545,95 @@ if st.button("Process"):
         total_videos = len(list_of_dicts)
         overall_progress = st.progress(0, text=f"Processing {total_videos} videos...")
         
+        max_retries = 3  # Reduce the number of retries for faster processing
+        retry_delay = 5  # Shorter delay between retries (in seconds)
+
+        # Initialize a dictionary to track processed URLs and their GIF URLs
+        processed_urls = {}
+
+        # Initialize gif_path at the beginning of the block
+        gif_path = None
+
         for index, raw_row in enumerate(list_of_dicts, 1):
             gcs_url = raw_row["Gcs Url"]
             try:
+                # Log the current row being processed
+                print(f"Processing row {index}: GCS URL = {gcs_url}")
+                
                 # Skip if GCS URL is NaN or empty
                 if pd.isna(gcs_url) or not gcs_url:
+                    print("Skipping due to missing GCS URL.")
                     continue
 
+                # Check if the URL has already been processed
+                if gcs_url in processed_urls:
+                    # Assign the existing GIF URL to the current row
+                    raw_row["GIF"] = processed_urls[gcs_url]
+                    print(f"Row {index} already processed. Assigned existing GIF URL: {raw_row['GIF']}")
+                    continue  # Skip further processing for this row
+
                 video_id = gcs_url.split("/")[-1].split(".")[0]
-                
-                # Create a temporary file for the video
                 temp_video_path = f"{video_id}.mp4"
-                urllib.request.urlretrieve(gcs_url, temp_video_path)
+
+                # Retry logic for downloading the video
+                for attempt in range(max_retries + 1):  # +1 to include the first attempt
+                    try:
+                        urllib.request.urlretrieve(gcs_url, temp_video_path)
+                        break  # Break if download is successful
+                    except Exception as e:
+                        print(f"[WARNING] Attempt {attempt + 1} failed: {str(e)}")
+                        if attempt < max_retries:
+                            time.sleep(retry_delay)
+                        else:
+                            print(f"[ERROR] Failed to download video after {max_retries} attempts.")
+                            raw_row["GIF"] = None  # Assign None if download fails
+                            continue
+
+                # Proceed with GIF conversion and upload
+                gif_path = convert_to_gif(temp_video_path, video_id)  # Ensure gif_path is set here
                 
-                gif_path = convert_to_gif(temp_video_path, video_id)
-                
-                # Upload GIF to GCS
-                bucket_name = "tiktok-actor-content"
-                gcs_folder = "gifs_20240419"
-                
-                gif_url = upload_gif_to_gcs(gif_path, video_id, bucket_name, gcs_folder)
-                
-                # Clean up temporary files
-                os.unlink(temp_video_path)
-                os.unlink(gif_path)
-                
-                raw_row["GIF"] = gif_url
-                
-                # Update overall progress
-                progress_percent = int((index / total_videos) * 100)
-                overall_progress.progress(progress_percent, text=f"Processed {index}/{total_videos} videos")
-                
+                try:
+                    # Check if GIF was created successfully
+                    if not os.path.exists(gif_path):
+                        raise Exception(f"GIF not created for video ID: {video_id}")
+                    
+                    # Upload GIF to GCS
+                    bucket_name = "tiktok-actor-content"
+                    gcs_folder = "gifs_20240419"
+                    gif_url = upload_gif_to_gcs(gif_path, video_id, bucket_name, gcs_folder)
+                    
+                    # Clean up temporary files
+                    if os.path.exists(temp_video_path):
+                        os.unlink(temp_video_path)
+                    if gif_path and os.path.exists(gif_path):  # Check if gif_path is defined
+                        os.unlink(gif_path)
+                    
+                    # Assign the GIF URL to the row
+                    raw_row["GIF"] = gif_url
+                    processed_urls[gcs_url] = gif_url  # Store the GIF URL for future reference
+                    print(f"Row {index} GIF URL assigned: {gif_url}")
+                    
+                except Exception as e:
+                    print(f"[ERROR] Failed to process row {index}: {str(e)}")
+                    # Clean up temporary files if they exist
+                    if os.path.exists(temp_video_path):
+                        os.unlink(temp_video_path)
+                    if gif_path and os.path.exists(gif_path):  # Check if gif_path is defined
+                        os.unlink(gif_path)
+                    raw_row["GIF"] = None  # Assign None if any error occurs
+
             except Exception as e:
+                print(f"[ERROR] Failed to process row {index}: {str(e)}")
                 # Clean up temporary files if they exist
-                if 'temp_video_path' in locals() and os.path.exists(temp_video_path):
+                if os.path.exists(temp_video_path):
                     os.unlink(temp_video_path)
-                if 'gif_path' in locals() and os.path.exists(gif_path):
+                if gif_path and os.path.exists(gif_path):  # Check if gif_path is defined
                     os.unlink(gif_path)
+                raw_row["GIF"] = None  # Assign None if any error occurs
+
+            # Update overall progress
+            progress_percent = int((index / total_videos) * 100)
+            overall_progress.progress(progress_percent, text=f"Processed {index}/{total_videos} videos")
 
         # Store final results
         final_results = pd.DataFrame(list_of_dicts)
@@ -577,7 +641,6 @@ if st.button("Process"):
         
         overall_progress.progress(100, text="All videos processed successfully!")
         st.success("Processing complete! Check the generated CSV file for GIF URLs.")
-
         # Display sample results and statistics
         st.write("\n📊 Sample of Processed Results:")
         st.write("Here are the first 3 rows of your processed data:")
