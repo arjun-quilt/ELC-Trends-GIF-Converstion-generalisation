@@ -10,3 +10,4 @@ playwright
 nest-asyncio
 subprocess.run
 openpyxl
+ffmpeg-python

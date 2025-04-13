@@ -84,7 +84,7 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.title("TikTok Video to GIF Converter")
 with col2:
-    st.write("Reset befor and after run is completed")
+    st.write("Reset befor and after running the application")
     if st.button("Reset Application", key="reset_button"):
         reset_application()
 
@@ -278,10 +278,9 @@ def yt_shorts_downloader(urls, bucket_name):
         ydl_opts = {
             'format': 'mp4',
             'outtmpl': '%(id)s.%(ext)s',  # Save as <video_id>.mp4
-            'quiet': False,
+            'quiet': True,
             'socket_timeout': 30,
             'headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
-
         }
 
         for retry in range(max_retries):
