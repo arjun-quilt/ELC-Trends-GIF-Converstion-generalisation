@@ -276,12 +276,20 @@ def yt_shorts_downloader(urls, bucket_name):
 
         # Set options for yt-dlp
         ydl_opts = {
-            'format': 'mp4',
-            'outtmpl': '%(id)s.%(ext)s',  # Save as <video_id>.mp4
+            'format': 'mp4',  # Download best quality
+            'outtmpl': '%(id)s.%(ext)s',            # Save as <video_id>.mp4
             'quiet': True,
             'socket_timeout': 30,
-            'headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
-        }
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+            },
+            'nocheckcertificate': True,
+            'merge_output_format': 'mp4',
+            'postprocessors': [{
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': 'mp4',
+            }],
+}
 
         for retry in range(max_retries):
             try:
