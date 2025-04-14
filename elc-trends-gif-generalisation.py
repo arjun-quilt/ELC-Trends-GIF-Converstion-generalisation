@@ -79,14 +79,41 @@ def reset_application():
         # Log the error for debugging
         print(f"Error during reset_application: {str(e)}")
         
-# Add reset button at the top
+# Function to download the sample template
+def download_sample_template():
+    url = "https://storage.googleapis.com/image_lib123/Sample%20Template.xlsx"
+    response = requests.get(url)
+    if response.status_code == 200:
+        with open("Sample_Template.xlsx", "wb") as f:
+            f.write(response.content)
+        return "Sample_Template.xlsx"
+    else:
+        print(f"Failed to download the file: {response.status_code}")
+        return None
+
+# Add reset button and sample template download button at the top
 col1, col2 = st.columns([3, 1])
 with col1:
     st.title("TikTok Video to GIF Converter")
 with col2:
-    st.write("Reset befor and after running the application")
+    st.write("Reset before and after each completed Run")
     if st.button("Reset Application", key="reset_button"):
         reset_application()
+    
+    # Download the sample template file
+    sample_template_file = download_sample_template()
+
+    # Sample Template Download Button
+    if sample_template_file:
+        with open(sample_template_file, "rb") as file:
+            st.download_button(
+                label="Sample Template",
+                data=file,
+                file_name="Sample_Template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"  # MIME type for Excel files
+            )
+    else:
+        st.warning("Sample template could not be downloaded.")
 
 # Extract the secret and create temporary credentials file
 gcp_secret = st.secrets["gcp_secret"]
