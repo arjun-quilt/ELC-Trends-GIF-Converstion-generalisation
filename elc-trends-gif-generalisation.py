@@ -36,6 +36,8 @@ if 'final_results' not in st.session_state:
     st.session_state.final_results = None
 if 'show_results' not in st.session_state:
     st.session_state.show_results = False
+if 'download_triggered' not in st.session_state:
+    st.session_state.download_triggered = False
 
 def reset_application():
     """Thoroughly reset the application state and perform cleanup"""
@@ -108,6 +110,7 @@ with col2:
         st.session_state.current_batch = 0
         st.session_state.final_results = None
         st.session_state.show_results = False
+        st.session_state.download_triggered = False
         st.rerun()
     
     # Download the sample template file
@@ -695,32 +698,32 @@ if st.button("Process"):
         st.session_state.processing = False
 
 # Display results if they exist in session state
-if hasattr(st.session_state, 'show_results') and hasattr(st.session_state, 'final_results'):
-    if st.session_state.show_results and st.session_state.final_results is not None:
-        st.write("\n📊 Sample of Processed Results:")
-        st.write("Here are the first 3 rows of your processed data:")
-        
-        # Create a sample dataframe with just the important columns
-        sample_df = st.session_state.final_results[['Links', 'Gcs Url', 'GIF']].head(3)
-        
-        # Display the sample
-        st.dataframe(sample_df)
-        
-        # Show processing statistics
-        st.write("\n📈 Processing Statistics:")
-        total_rows = len(st.session_state.final_results)
-        rows_with_gcs = sum(st.session_state.final_results['Gcs Url'].notna())
-        rows_with_gif = sum(st.session_state.final_results['GIF'].notna())
-        
-        st.write(f"Total rows processed: {total_rows}")
-        st.write(f"Rows with GCS URLs: {rows_with_gcs} ({(rows_with_gcs/total_rows)*100:.1f}%)")
-        st.write(f"Rows with GIF URLs: {rows_with_gif} ({(rows_with_gif/total_rows)*100:.1f}%)")
+if st.session_state.show_results and st.session_state.final_results is not None:
+    st.write("\n📊 Sample of Processed Results:")
+    st.write("Here are the first 3 rows of your processed data:")
+    
+    # Create a sample dataframe with just the important columns
+    sample_df = st.session_state.final_results[['Links', 'Gcs Url', 'GIF']].head(3)
+    
+    # Display the sample
+    st.dataframe(sample_df)
+    
+    # Show processing statistics
+    st.write("\n📈 Processing Statistics:")
+    total_rows = len(st.session_state.final_results)
+    rows_with_gcs = sum(st.session_state.final_results['Gcs Url'].notna())
+    rows_with_gif = sum(st.session_state.final_results['GIF'].notna())
+    
+    st.write(f"Total rows processed: {total_rows}")
+    st.write(f"Rows with GCS URLs: {rows_with_gcs} ({(rows_with_gcs/total_rows)*100:.1f}%)")
+    st.write(f"Rows with GIF URLs: {rows_with_gif} ({(rows_with_gif/total_rows)*100:.1f}%)")
 
-        # Show download button
-        with open(f"{country_name}_trend_gifs.csv", "rb") as file:
-            st.download_button(
-                label="Download CSV File",
-                data=file,
-                file_name=f"{country_name}_trend_gifs.csv",
-                mime="text/csv"
-            )
+    # Show download button with a unique key
+    download_key = f"download_{country_name}"
+    st.download_button(
+        label="Download CSV File",
+        data=st.session_state.final_results.to_csv(index=False, encoding="utf_8_sig").encode('utf-8'),
+        file_name=f"{country_name}_trend_gifs.csv",
+        mime="text/csv",
+        key=download_key
+    )
