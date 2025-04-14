@@ -256,13 +256,16 @@ async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
             status_tasks = []
             API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
             for run_id in run_ids:
-                status_tasks.append(check_run_status(run_id, API_TOKEN, status_placeholder))
+                # Create new status check task for each run
+                status_task = check_run_status(run_id, API_TOKEN, status_placeholder)
+                status_tasks.append(status_task)
             
             # Wait for all status checks to complete
-            results = await asyncio.gather(*status_tasks)
+            results = await asyncio.gather(*status_tasks, return_exceptions=True)
             
-            # Check if all runs succeeded
-            if all(results):
+            # Filter out any exceptions and check if all runs succeeded
+            valid_results = [r for r in results if not isinstance(r, Exception)]
+            if all(valid_results):
                 st.success("All Apify runs completed successfully!")
                 # Get dataset IDs from all successful runs
                 dataset_ids = [response.json()["data"]["defaultDatasetId"] for response in valid_responses]
@@ -497,47 +500,41 @@ if st.button("Process"):
         # Process TikTok videos if any
         if tiktok_urls:
             st.write(f"Processing {len(tiktok_urls)} TikTok videos...")
-            # Create a new event loop for this operation
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                success, dataset_ids = loop.run_until_complete(process_tiktok_videos(tiktok_urls))
-                if not success:
-                    st.error("Apify task failed. Please try again.")
-                    st.session_state.processing = False
-                    st.stop()
-                    
-                st.write("All TikTok videos processed successfully. Fetching dataset items...")
+            success, dataset_ids = asyncio.run(process_tiktok_videos(tiktok_urls))
+            if not success:
+                st.error("Apify task failed. Please try again.")
+                st.session_state.processing = False
+                st.stop()
                 
-                # Fetch items from all datasets
-                all_items = []
-                for dataset_id in dataset_ids:
-                    dataset = loop.run_until_complete(get_items(dataset_id))
-                    all_items.extend(dataset)
-                
-                st.write(f"Fetched {len(all_items)} items from all datasets.")
-                
-                # Create mapping for TikTok videos
-                all_items_dict = {}
-                for raw_row in all_items:
-                    try:
-                        original_url = raw_row["submittedVideoUrl"]
-                        all_items_dict[original_url] = {
-                            "Gcs Url": raw_row["gcsMediaUrls"][0]
-                        }
-                    except Exception as e:
-                        # st.error(f"Error processing row: {raw_row} - {e}")
-                        print(e)
-
-                # Update GCS URLs for TikTok videos
-                for input_dict in cleaned_input_list:
-                    if isinstance(input_dict["Links"], str) and "tiktok.com" in input_dict["Links"]:
-                        clean_url = input_dict["Links"]
-                        video_id = clean_url.split("?")[0].split("/")[-1]
-                        input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
+            st.write("All TikTok videos processed successfully. Fetching dataset items...")
             
-            finally:
-                loop.close()
+            # Fetch items from all datasets
+            all_items = []
+            for dataset_id in dataset_ids:
+                # st.write(f"Fetching items from dataset {dataset_id}...")
+                dataset = asyncio.run(get_items(dataset_id))
+                all_items.extend(dataset)
+            
+            st.write(f"Fetched {len(all_items)} items from all datasets.")
+            
+            # Create mapping for TikTok videos
+            all_items_dict = {}
+            for raw_row in all_items:
+                try:
+                    original_url = raw_row["submittedVideoUrl"]
+                    all_items_dict[original_url] = {
+                        "Gcs Url": raw_row["gcsMediaUrls"][0]
+                    }
+                except Exception as e:
+                    # st.error(f"Error processing row: {raw_row} - {e}")
+                    print(e)
+
+            # Update GCS URLs for TikTok videos
+            for input_dict in cleaned_input_list:
+                if isinstance(input_dict["Links"], str) and "tiktok.com" in input_dict["Links"]:
+                    clean_url = input_dict["Links"]
+                    video_id = clean_url.split("?")[0].split("/")[-1]
+                    input_dict["Gcs Url"] = f"https://storage.googleapis.com/tiktok-actor-content/{video_id}.mp4"
         
         # Process YouTube Shorts if any
         if youtube_urls:
