@@ -239,26 +239,36 @@ async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
                     "tiktokMemoryMb": "default",
                     "postURLs": batch
                 }
-                tasks.append(run_actor_task(input_params))
+                # Create new task for each batch
+                task = run_actor_task(input_params)
+                tasks.append(task)
             
-            responses = await asyncio.gather(*tasks)
-            run_ids = [response.json()['data']['id'] for response in responses]
+            # Wait for all tasks to complete
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Filter out any exceptions
+            valid_responses = [r for r in responses if not isinstance(r, Exception)]
+            run_ids = [response.json()['data']['id'] for response in valid_responses]
+            
             st.write(f"Started {len(run_ids)} Apify runs")
 
             # Check status of all runs
             status_tasks = []
             API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
             for run_id in run_ids:
-                status_tasks.append(check_run_status(run_id, API_TOKEN, status_placeholder))
+                # Create new status check task for each run
+                status_task = check_run_status(run_id, API_TOKEN, status_placeholder)
+                status_tasks.append(status_task)
             
             # Wait for all status checks to complete
-            results = await asyncio.gather(*status_tasks)
+            results = await asyncio.gather(*status_tasks, return_exceptions=True)
             
-            # Check if all runs succeeded
-            if all(results):
+            # Filter out any exceptions and check if all runs succeeded
+            valid_results = [r for r in results if not isinstance(r, Exception)]
+            if all(valid_results):
                 st.success("All Apify runs completed successfully!")
                 # Get dataset IDs from all successful runs
-                dataset_ids = [response.json()["data"]["defaultDatasetId"] for response in responses]
+                dataset_ids = [response.json()["data"]["defaultDatasetId"] for response in valid_responses]
                 return True, dataset_ids
             else:
                 st.error("Some Apify runs failed. Please check the logs above.")
