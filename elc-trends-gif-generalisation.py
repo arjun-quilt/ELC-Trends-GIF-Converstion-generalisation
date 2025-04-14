@@ -210,6 +210,29 @@ async def check_run_status(run_id: str, api_token: str, status_placeholder) -> b
             status_placeholder.warning(f"Run {run_id}: Request failed - {str(e)}")
             await asyncio.sleep(retry_delay)
 
+# Create a function to run async code safely
+def run_async(coro):
+    try:
+        # Try to get the current event loop
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        # If no event loop exists, create a new one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    try:
+        # Create a new task from the coroutine
+        task = asyncio.create_task(coro)
+        # Run the task until completion
+        return loop.run_until_complete(task)
+    except Exception as e:
+        print(f"Error in run_async: {str(e)}")
+        raise
+    finally:
+        # Clean up the event loop
+        if not loop.is_closed():
+            loop.close()
+
 @st.cache_resource
 async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
     """Process all TikTok videos in parallel batches"""
@@ -224,6 +247,10 @@ async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
     # Start all batches
     with st.spinner(f"Processing {len(tiktok_videos)} TikTok videos in {len(batches)} batches..."):
         try:
+            # Create a new event loop for this operation
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
             # Launch all actor tasks
             tasks = []
             for batch in batches:
@@ -240,7 +267,7 @@ async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
                     "postURLs": batch
                 }
                 # Create new task for each batch
-                task = run_actor_task(input_params)
+                task = asyncio.create_task(run_actor_task(input_params))
                 tasks.append(task)
             
             # Wait for all tasks to complete
@@ -257,7 +284,7 @@ async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
             API_TOKEN = "apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
             for run_id in run_ids:
                 # Create new status check task for each run
-                status_task = check_run_status(run_id, API_TOKEN, status_placeholder)
+                status_task = asyncio.create_task(check_run_status(run_id, API_TOKEN, status_placeholder))
                 status_tasks.append(status_task)
             
             # Wait for all status checks to complete
@@ -277,6 +304,10 @@ async def process_tiktok_videos(tiktok_videos: List[str], batch_size: int = 5):
         except Exception as e:
             st.error(f"Error during batch processing: {str(e)}")
             return False, None
+        finally:
+            # Clean up the event loop
+            if not loop.is_closed():
+                loop.close()
 
 @st.cache_resource
 def upload_video_to_gcs(video_file: str, bucket_name: str) -> str:
@@ -391,19 +422,6 @@ def yt_shorts_downloader(urls, bucket_name):
 
 # Apply nested event loop fix for Jupyter/Colab
 nest_asyncio.apply()
-
-# Create a function to run async code safely
-def run_async(coro):
-    try:
-        return asyncio.get_event_loop().run_until_complete(coro)
-    except RuntimeError:
-        # If no event loop exists, create a new one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
 
 @st.cache_data
 def extract_and_download_douyin_video(video_page_url):
