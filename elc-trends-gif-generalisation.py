@@ -391,6 +391,20 @@ def yt_shorts_downloader(urls, bucket_name):
 
 # Apply nested event loop fix for Jupyter/Colab
 nest_asyncio.apply()
+
+# Create a function to run async code safely
+def run_async(coro):
+    try:
+        return asyncio.get_event_loop().run_until_complete(coro)
+    except RuntimeError:
+        # If no event loop exists, create a new one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
 @st.cache_data
 def extract_and_download_douyin_video(video_page_url):
     async def _async_extract_and_download():
@@ -500,19 +514,18 @@ if st.button("Process"):
         # Process TikTok videos if any
         if tiktok_urls:
             st.write(f"Processing {len(tiktok_urls)} TikTok videos...")
-            success, dataset_ids = asyncio.run(process_tiktok_videos(tiktok_urls))
+            success, dataset_ids = run_async(process_tiktok_videos(tiktok_urls))
             if not success:
                 st.error("Apify task failed. Please try again.")
                 st.session_state.processing = False
                 st.stop()
-                
+            
             st.write("All TikTok videos processed successfully. Fetching dataset items...")
             
             # Fetch items from all datasets
             all_items = []
             for dataset_id in dataset_ids:
-                # st.write(f"Fetching items from dataset {dataset_id}...")
-                dataset = asyncio.run(get_items(dataset_id))
+                dataset = run_async(get_items(dataset_id))
                 all_items.extend(dataset)
             
             st.write(f"Fetched {len(all_items)} items from all datasets.")
@@ -526,7 +539,6 @@ if st.button("Process"):
                         "Gcs Url": raw_row["gcsMediaUrls"][0]
                     }
                 except Exception as e:
-                    # st.error(f"Error processing row: {raw_row} - {e}")
                     print(e)
 
             # Update GCS URLs for TikTok videos
