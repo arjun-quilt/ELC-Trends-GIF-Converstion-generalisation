@@ -32,6 +32,10 @@ if 'processed_urls' not in st.session_state:
     st.session_state.processed_urls = {}
 if 'current_batch' not in st.session_state:
     st.session_state.current_batch = 0
+if 'final_results' not in st.session_state:
+    st.session_state.final_results = None
+if 'show_results' not in st.session_state:
+    st.session_state.show_results = False
 
 def reset_application():
     """Thoroughly reset the application state and perform cleanup"""
@@ -98,7 +102,13 @@ with col1:
 with col2:
     st.write("Reset before and after each completed Run")
     if st.button("Reset Application", key="reset_button"):
-        reset_application()
+        # Reset all session state variables
+        st.session_state.processing = False
+        st.session_state.processed_urls = {}
+        st.session_state.current_batch = 0
+        st.session_state.final_results = None
+        st.session_state.show_results = False
+        st.rerun()
     
     # Download the sample template file
     sample_template_file = download_sample_template()
@@ -443,6 +453,7 @@ if st.button("Process"):
         st.session_state.processing = True
         st.session_state.processed_urls = {}
         st.session_state.current_batch = 0
+        st.session_state.show_results = False
         
         # Create a copy of the DataFrame and drop rows with NaN in the 'Links' column
         input_list_of_dicts = pd.read_excel(uploaded_file, sheet_name=country_name).to_dict(orient="records")
@@ -672,27 +683,34 @@ if st.button("Process"):
             progress_percent = int((index / total_videos) * 100)
             overall_progress.progress(progress_percent, text=f"Processed {index}/{total_videos} videos")
 
-        # Store final results
-        final_results = pd.DataFrame(list_of_dicts)
-        final_results.to_csv(f"{country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
+        # Store final results in session state
+        st.session_state.final_results = pd.DataFrame(list_of_dicts)
+        st.session_state.final_results.to_csv(f"{country_name}_trend_gifs.csv", index=False, encoding="utf_8_sig")
         
         overall_progress.progress(100, text="All videos processed successfully!")
         st.success("Processing complete! Check the generated CSV file for GIF URLs.")
-        # Display sample results and statistics
+        
+        # Set show_results to True to display results
+        st.session_state.show_results = True
+        st.session_state.processing = False
+
+# Display results if they exist in session state
+if hasattr(st.session_state, 'show_results') and hasattr(st.session_state, 'final_results'):
+    if st.session_state.show_results and st.session_state.final_results is not None:
         st.write("\n📊 Sample of Processed Results:")
         st.write("Here are the first 3 rows of your processed data:")
         
         # Create a sample dataframe with just the important columns
-        sample_df = final_results[['Links', 'Gcs Url', 'GIF']].head(3)
+        sample_df = st.session_state.final_results[['Links', 'Gcs Url', 'GIF']].head(3)
         
         # Display the sample
         st.dataframe(sample_df)
         
         # Show processing statistics
         st.write("\n📈 Processing Statistics:")
-        total_rows = len(final_results)
-        rows_with_gcs = sum(final_results['Gcs Url'].notna())
-        rows_with_gif = sum(final_results['GIF'].notna())
+        total_rows = len(st.session_state.final_results)
+        rows_with_gcs = sum(st.session_state.final_results['Gcs Url'].notna())
+        rows_with_gif = sum(st.session_state.final_results['GIF'].notna())
         
         st.write(f"Total rows processed: {total_rows}")
         st.write(f"Rows with GCS URLs: {rows_with_gcs} ({(rows_with_gcs/total_rows)*100:.1f}%)")
@@ -706,6 +724,3 @@ if st.button("Process"):
                 file_name=f"{country_name}_trend_gifs.csv",
                 mime="text/csv"
             )
-        
-        # Reset processing state
-        st.session_state.processing = False
