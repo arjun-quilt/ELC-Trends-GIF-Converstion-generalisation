@@ -2,7 +2,7 @@ yt-dlp
 moviepy==1.0.3
 requests
 pandas
-streamlit==1.37.0
+streamlit
 google-cloud-storage
 asyncio
 httpx
