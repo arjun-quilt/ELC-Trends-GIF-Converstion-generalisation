@@ -57,7 +57,7 @@ def reset_application():
         # Clear any temporary files
         try:
             for file in os.listdir('.'):
-                if file.endswith(('.mp4', '.gif', '.csv')):
+                if file.endswith(('.mp4', '.gif', '.csv', '.xlsx', '.json', '.txt', '.png', '.jpg', '.jpeg', '.webp','.log')):
                     try:
                         os.remove(file)
                         print(f"Removed temporary file: {file}")
