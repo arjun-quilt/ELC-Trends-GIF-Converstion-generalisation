@@ -14,7 +14,7 @@ from typing import List
 import yt_dlp
 import gc
 import re
-from playwright.async_api import async_playwright
+# from playwright.async_api import async_playwright
 import nest_asyncio
 import subprocess
 import openpyxl
@@ -391,72 +391,72 @@ def yt_shorts_downloader(urls, bucket_name):
     status_text.text(f"Completed processing {total_shorts} YouTube Shorts")
     return processed_urls
 
-# Apply nested event loop fix for Jupyter/Colab
-nest_asyncio.apply()
-@st.cache_data
-def extract_and_download_douyin_video(video_page_url):
-    async def _async_extract_and_download():
-        match = re.search(r'/video/(\d+)', video_page_url)
-        if not match:
-            print("[ERROR] Unable to extract video ID from URL.")
-            return None
-        video_id = match.group(1)
-        filename = f"{video_id}.mp4"
+# # Apply nested event loop fix for Jupyter/Colab
+# nest_asyncio.apply()
+# @st.cache_data
+# def extract_and_download_douyin_video(video_page_url):
+#     async def _async_extract_and_download():
+#         match = re.search(r'/video/(\d+)', video_page_url)
+#         if not match:
+#             print("[ERROR] Unable to extract video ID from URL.")
+#             return None
+#         video_id = match.group(1)
+#         filename = f"{video_id}.mp4"
 
-        print("[INFO] Starting Playwright session...")
-        async with async_playwright() as p:
-            print("[INFO] Launching browser...")
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+#         print("[INFO] Starting Playwright session...")
+#         async with async_playwright() as p:
+#             print("[INFO] Launching browser...")
+#             browser = await p.chromium.launch(headless=True)
+#             page = await browser.new_page()
 
-            video_url = None
+#             video_url = None
 
-            async def intercept_response(response):
-                nonlocal video_url
-                url = response.url
-                if "video" in url and (url.endswith(".mp4") or "mime_type=video_mp4" in url):
-                    print(f"[INFO] Found video URL: {url}")
-                    video_url = url
+#             async def intercept_response(response):
+#                 nonlocal video_url
+#                 url = response.url
+#                 if "video" in url and (url.endswith(".mp4") or "mime_type=video_mp4" in url):
+#                     print(f"[INFO] Found video URL: {url}")
+#                     video_url = url
 
-            page.on("response", intercept_response)
+#             page.on("response", intercept_response)
 
-            print(f"[INFO] Navigating to {video_page_url}...")
-            await page.goto(video_page_url, timeout=120000)
+#             print(f"[INFO] Navigating to {video_page_url}...")
+#             await page.goto(video_page_url, timeout=120000)
 
-            print("[INFO] Waiting for video element to appear...")
-            try:
-                await page.wait_for_selector("video", timeout=15000)
-            except Exception as e:
-                print(f"[WARNING] Video element not found: {e}")
+#             print("[INFO] Waiting for video element to appear...")
+#             try:
+#                 await page.wait_for_selector("video", timeout=15000)
+#             except Exception as e:
+#                 print(f"[WARNING] Video element not found: {e}")
 
-            print("[INFO] Waiting for network requests to be captured...")
-            await page.wait_for_timeout(5000)
-            await browser.close()
+#             print("[INFO] Waiting for network requests to be captured...")
+#             await page.wait_for_timeout(5000)
+#             await browser.close()
 
-            if video_url:
-                print(f"[SUCCESS] Extracted video URL: {video_url}")
-                print(f"[INFO] Downloading video from {video_url}...")
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-                    "Referer": "https://www.douyin.com/",
-                    "Range": "bytes=0-"
-                }
-                response = requests.get(video_url, headers=headers, stream=True)
-                if response.status_code in [200, 206]:
-                    print("[INFO] Saving video to file...")
-                    with open(filename, "wb") as file:
-                        for chunk in response.iter_content(chunk_size=1024):
-                            file.write(chunk)
-                    print(f"[SUCCESS] Video downloaded successfully as {filename}")
-                    return filename  # Return the filename for further processing
-                else:
-                    print(f"[ERROR] Failed to download video. Status Code: {response.status_code}")
-            else:
-                print("[ERROR] Failed to extract video URL.")
-            return None
+#             if video_url:
+#                 print(f"[SUCCESS] Extracted video URL: {video_url}")
+#                 print(f"[INFO] Downloading video from {video_url}...")
+#                 headers = {
+#                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+#                     "Referer": "https://www.douyin.com/",
+#                     "Range": "bytes=0-"
+#                 }
+#                 response = requests.get(video_url, headers=headers, stream=True)
+#                 if response.status_code in [200, 206]:
+#                     print("[INFO] Saving video to file...")
+#                     with open(filename, "wb") as file:
+#                         for chunk in response.iter_content(chunk_size=1024):
+#                             file.write(chunk)
+#                     print(f"[SUCCESS] Video downloaded successfully as {filename}")
+#                     return filename  # Return the filename for further processing
+#                 else:
+#                     print(f"[ERROR] Failed to download video. Status Code: {response.status_code}")
+#             else:
+#                 print("[ERROR] Failed to extract video URL.")
+#             return None
 
-    # Run async logic in already-running event loop
-    return asyncio.get_event_loop().run_until_complete(_async_extract_and_download())
+#     # Run async logic in already-running event loop
+#     return asyncio.get_event_loop().run_until_complete(_async_extract_and_download())
 
 # Streamlit UI
 uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"])
