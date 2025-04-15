@@ -19,7 +19,11 @@ import nest_asyncio
 import subprocess
 import openpyxl
 
-
+# Install system dependencies
+try:
+    subprocess.run(["playwright", "install"], check=True)
+except Exception as e:
+    print(f"Error installing Playwright browsers: {e}")
 
 # Initialize session state
 if 'processing' not in st.session_state:
@@ -35,11 +39,7 @@ if 'show_results' not in st.session_state:
 if 'download_triggered' not in st.session_state:
     st.session_state.download_triggered = False
 
-# Install system dependencies
-try:
-    subprocess.run(["playwright", "install", "chromium"], check=True)
-except Exception as e:
-    print(f"Error installing Playwright browsers: {e}")
+
 
 def reset_application():
     """Thoroughly reset the application state and perform cleanup"""
