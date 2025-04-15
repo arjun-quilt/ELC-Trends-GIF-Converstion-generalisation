@@ -19,6 +19,8 @@ import nest_asyncio
 import subprocess
 import openpyxl
 
+
+
 # Initialize session state
 if 'processing' not in st.session_state:
     st.session_state.processing = False
@@ -32,36 +34,12 @@ if 'show_results' not in st.session_state:
     st.session_state.show_results = False
 if 'download_triggered' not in st.session_state:
     st.session_state.download_triggered = False
-if 'gcp_initialized' not in st.session_state:
-    st.session_state.gcp_initialized = False
 
-def initialize_gcp():
-    """Initialize GCP credentials only when needed"""
-    if not st.session_state.gcp_initialized:
-        try:
-            # Extract the secret and create temporary credentials file
-            gcp_secret = st.secrets["gcp_secret"]
-            with tempfile.NamedTemporaryFile(delete=False, mode="w") as temp_file:
-                temp_file.write(gcp_secret)
-                temp_file_path = temp_file.name
-
-            # Set the environment variable to the temporary file path
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_file_path
-            st.session_state.gcp_initialized = True
-            return True
-        except Exception as e:
-            st.error(f"Failed to initialize GCP credentials: {str(e)}")
-            return False
-    return True
-
-def install_playwright():
-    """Install Playwright browsers only when needed"""
-    try:
-        subprocess.run(["playwright", "install", "chromium"], check=True)
-        return True
-    except Exception as e:
-        st.error(f"Error installing Playwright browsers: {e}")
-        return False
+# Install system dependencies
+try:
+    subprocess.run(["playwright", "install", "chromium"], check=True)
+except Exception as e:
+    print(f"Error installing Playwright browsers: {e}")
 
 def reset_application():
     """Thoroughly reset the application state and perform cleanup"""
@@ -108,7 +86,7 @@ def reset_application():
         st.error(f"Error during cleanup: {str(e)}")
         # Log the error for debugging
         print(f"Error during reset_application: {str(e)}")
-
+        
 # Function to download the sample template
 def download_sample_template():
     url = "https://storage.googleapis.com/image_lib123/Sample%20Template.xlsx"
@@ -152,6 +130,15 @@ with col2:
     else:
         st.warning("Sample template could not be downloaded.")
 
+# Extract the secret and create temporary credentials file
+gcp_secret = st.secrets["gcp_secret"]
+with tempfile.NamedTemporaryFile(delete=False, mode="w") as temp_file:
+    temp_file.write(gcp_secret)
+    temp_file_path = temp_file.name
+
+# Set the environment variable to the temporary file path
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_file_path
+
 # Function to run the Apify actor task
 async def run_actor_task(data: dict) -> dict:
     url = "https://api.apify.com/v2/actor-tasks/eKYRHMIgvYqAlh1r3/runs?token=apify_api_VUQNA5xFO4IwieTeWX7HmKUYnNZOnw0c2tgk"
@@ -171,8 +158,6 @@ async def get_items(dataset_id: str) -> dict:
 
 @st.cache_resource
 def get_storage_client():
-    if not initialize_gcp():
-        raise Exception("Failed to initialize GCP credentials")
     return storage.Client()
 
 @st.cache_data
@@ -184,6 +169,7 @@ def convert_to_gif(media_file, video_id, max_duration=2, fps=3):
         clip = clip.set_fps(fps)
         clip.write_gif(temp_gif_path)
     return temp_gif_path
+
 
 @st.cache_data
 def upload_gif_to_gcs(local_file_path: str, video_id: str, bucket_name: str, gcs_folder: str):
