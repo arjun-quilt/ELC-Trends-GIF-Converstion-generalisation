@@ -20,10 +20,10 @@ import subprocess
 import openpyxl
 
 # Install system dependencies
-try:
-    subprocess.run(["playwright", "install"], check=True)
-except Exception as e:
-    print(f"Error installing Playwright browsers: {e}")
+# try:
+#     subprocess.run(["playwright", "install"], check=True)
+# except Exception as e:
+#     print(f"Error installing Playwright browsers: {e}")
 
 # Initialize session state
 if 'processing' not in st.session_state:
